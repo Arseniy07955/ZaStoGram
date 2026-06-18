@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Static guard for the active MTProxy FakeTLS transport path.
 
-The working reference is tsrman/tg commit 9fe18931 for the risky transport
-parts: direct Firefox ClientHello, whole ClientHello send, blocking jitter, and
-the original fixed TLS record cap for wrapped data.
+The working reference is tsrman/tg commit 9fe18931 for the risky fingerprint
+parts: direct Firefox ClientHello, whole ClientHello send, and the original
+fixed TLS record cap for wrapped data. The Android transport adds nonblocking
+startup pacing, startup diagnostics, and a TLS write queue so MTProto payload
+bytes are not discarded until the full TLS record has been sent.
 """
 
 from pathlib import Path
@@ -53,20 +55,34 @@ def main() -> int:
         "dynamic record sizing must stay removed from the transport path",
     )
     require(
-        "int delay = 500 + (rand() % 501);" in cpp,
-        "proxy pacing must use the working tsrman blocking jitter",
+        "nanosleep(&ts, nullptr);" not in cpp,
+        "proxy pacing must not block the network thread",
     )
     require(
-        "nanosleep(&ts, nullptr);" in cpp,
-        "proxy pacing must block before connect like tsrman",
+        "scheduleProxyPacingIfNeeded" in combined
+        and "cancelProxyPacing" in combined
+        and "Timer *proxyPacingTimer" in header
+        and '#include "Timer.h"' in cpp,
+        "proxy pacing must use a cancellable nonblocking Timer",
     )
     require(
-        "pacingTimer" not in combined and "pacingDeferred" not in combined,
-        "nonblocking Timer pacing must stay out of MTProxy connect",
+        "pacingDeferred" not in combined,
+        "old deferred pacing path must stay out of MTProxy connect",
     )
     require(
-        '#include "Timer.h"' not in cpp,
-        "ConnectionSocket.cpp must not depend on Timer for MTProxy pacing",
+        "mtproxy_startup connect_start" in cpp
+        and "mtproxy_startup socket_connected" in cpp
+        and "mtproxy_startup client_hello_sent" in cpp
+        and "mtproxy_startup server_hello_hmac_ok" in cpp
+        and "mtproxy_startup on_connected" in cpp
+        and "mtproxy_disconnect" in cpp,
+        "MTProxy startup diagnostics must cover connect, TLS handshake, connected, and disconnect",
+    )
+    require(
+        "pendingTlsFrame" in combined
+        and "sendPendingTlsFrame" in combined
+        and "clearPendingTlsFrame" in combined,
+        "TLS writes must keep a pending frame for partial-send handling",
     )
 
     if errors:

@@ -18,6 +18,7 @@ class ConnectionsManager;
 class ByteStream;
 class EventObject;
 class ByteArray;
+class Timer;
 
 class ConnectionSocket {
 
@@ -77,15 +78,30 @@ private:
     bool tlsBufferSized = true;
     NativeByteBuffer *tlsBuffer = nullptr;
     ByteArray *tempBuffer = nullptr;
+    ByteArray *pendingTlsFrame = nullptr;
     size_t bytesRead = 0;
+    uint32_t pendingTlsFrameSize = 0;
+    uint32_t pendingTlsFrameOffset = 0;
+    uint32_t pendingTlsPayloadSize = 0;
     int8_t tlsState = 0;
 
-    uint8_t proxyAuthState;
+    uint8_t proxyAuthState = 0;
+    Timer *proxyPacingTimer = nullptr;
+    bool proxyPacingScheduled = false;
+    bool proxyPacingReady = false;
+    bool proxyPacingIpv6 = false;
+    bool mtproxySocketConnectedLogged = false;
+    uint32_t proxyPacingGeneration = 0;
 
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
     void openConnectionInternal(bool ipv6);
     void adjustWriteOp();
+    bool scheduleProxyPacingIfNeeded(bool ipv6);
+    void cancelProxyPacing();
+    void clearPendingTlsFrame();
+    bool buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t remaining);
+    bool sendPendingTlsFrame();
 
     friend class EventObject;
     friend class ConnectionsManager;

@@ -28,6 +28,7 @@
 #include "ConnectionsManager.h"
 #include "EventObject.h"
 #include "NativeByteBuffer.h"
+#include "Timer.h"
 #include "BuffersStorage.h"
 #include "Connection.h"
 #include <random>
@@ -549,6 +550,12 @@ ConnectionSocket::ConnectionSocket(int32_t instance) {
 }
 
 ConnectionSocket::~ConnectionSocket() {
+    cancelProxyPacing();
+    clearPendingTlsFrame();
+    if (proxyPacingTimer != nullptr) {
+        delete proxyPacingTimer;
+        proxyPacingTimer = nullptr;
+    }
     if (outgoingByteStream != nullptr) {
         delete outgoingByteStream;
         outgoingByteStream = nullptr;
@@ -567,14 +574,155 @@ ConnectionSocket::~ConnectionSocket() {
     }
 }
 
+bool ConnectionSocket::scheduleProxyPacingIfNeeded(bool ipv6) {
+    if (proxyAuthState < 10 || socketFd < 0) {
+        return false;
+    }
+
+    int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    int64_t elapsed;
+    int delay = 0;
+    pthread_mutex_lock(&proxyJitterMutex);
+    elapsed = now - lastProxyConnectTime;
+    if (elapsed < 450) {
+        delay = 120 + (int) secureRandomBounded(181); // 120..300 ms
+        if (elapsed < 120) {
+            delay += (int) secureRandomBounded(151); // short burst tail: +0..150 ms
+        }
+        lastProxyConnectTime = now + delay;
+    } else {
+        lastProxyConnectTime = now;
+    }
+    pthread_mutex_unlock(&proxyJitterMutex);
+
+    if (delay <= 0) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup pacing_no_delay elapsed=%ld", this, (long) elapsed);
+        return false;
+    }
+
+    if (proxyPacingTimer == nullptr) {
+        proxyPacingTimer = new Timer(instanceNum, [this] {
+            if (proxyPacingTimer != nullptr) {
+                proxyPacingTimer->stop();
+            }
+            if (!proxyPacingScheduled || socketFd < 0) {
+                return;
+            }
+            proxyPacingScheduled = false;
+            proxyPacingReady = true;
+            bool delayedIpv6 = proxyPacingIpv6;
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup pacing_fire generation=%u", this, proxyPacingGeneration);
+            openConnectionInternal(delayedIpv6);
+        });
+    }
+
+    proxyPacingTimer->stop();
+    proxyPacingIpv6 = ipv6;
+    proxyPacingScheduled = true;
+    proxyPacingReady = false;
+    proxyPacingGeneration++;
+    proxyPacingTimer->setTimeout((uint32_t) delay, false);
+    proxyPacingTimer->start();
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup pacing_delay delay=%d elapsed=%ld generation=%u", this, delay, (long) elapsed, proxyPacingGeneration);
+    return true;
+}
+
+void ConnectionSocket::cancelProxyPacing() {
+    proxyPacingScheduled = false;
+    proxyPacingReady = false;
+    proxyPacingIpv6 = false;
+    proxyPacingGeneration++;
+    if (proxyPacingTimer != nullptr) {
+        proxyPacingTimer->stop();
+    }
+}
+
+void ConnectionSocket::clearPendingTlsFrame() {
+    if (pendingTlsFrame != nullptr) {
+        delete pendingTlsFrame;
+        pendingTlsFrame = nullptr;
+    }
+    pendingTlsFrameSize = 0;
+    pendingTlsFrameOffset = 0;
+    pendingTlsPayloadSize = 0;
+}
+
+bool ConnectionSocket::buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t remaining) {
+    if (pendingTlsFrame != nullptr || buffer == nullptr || remaining == 0) {
+        return false;
+    }
+    if (remaining > 2878) {
+        remaining = 2878;
+    }
+    size_t headersSize = 0;
+    if (tlsState == 1) {
+        static std::string header1 = std::string("\x14\x03\x03\x00\x01\x01", 6);
+        std::memcpy(tempBuffer->bytes, header1.data(), header1.size());
+        headersSize += header1.size();
+        tlsState = 2;
+    }
+    static std::string header2 = std::string("\x17\x03\x03", 3);
+    std::memcpy(tempBuffer->bytes + headersSize, header2.data(), header2.size());
+    headersSize += header2.size();
+
+    tempBuffer->bytes[headersSize] = static_cast<uint8_t>((remaining >> 8) & 0xff);
+    tempBuffer->bytes[headersSize + 1] = static_cast<uint8_t>(remaining & 0xff);
+    headersSize += 2;
+
+    std::memcpy(tempBuffer->bytes + headersSize, buffer->bytes(), remaining);
+
+    pendingTlsFrameSize = (uint32_t) headersSize + remaining;
+    pendingTlsFrameOffset = 0;
+    pendingTlsPayloadSize = remaining;
+    pendingTlsFrame = new ByteArray(pendingTlsFrameSize);
+    std::memcpy(pendingTlsFrame->bytes, tempBuffer->bytes, pendingTlsFrameSize);
+    return true;
+}
+
+bool ConnectionSocket::sendPendingTlsFrame() {
+    while (pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize) {
+        ssize_t sentLength = send(socketFd, pendingTlsFrame->bytes + pendingTlsFrameOffset, pendingTlsFrameSize - pendingTlsFrameOffset, 0);
+        if (sentLength < 0) {
+            int err = errno;
+            if (err == EAGAIN || err == EWOULDBLOCK) {
+                adjustWriteOp();
+                return true;
+            }
+            if (LOGS_ENABLED) DEBUG_E("connection(%p) TLS pending send failed errno=%d", this, err);
+            closeSocket(1, -1);
+            return false;
+        }
+        if (sentLength == 0) {
+            adjustWriteOp();
+            return true;
+        }
+        pendingTlsFrameOffset += (uint32_t) sentLength;
+        if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
+            ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
+        }
+    }
+
+    if (pendingTlsFrame != nullptr) {
+        outgoingByteStream->discard(pendingTlsPayloadSize);
+        clearPendingTlsFrame();
+        adjustWriteOp();
+    }
+    return true;
+}
+
 void ConnectionSocket::openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType) {
+    cancelProxyPacing();
+    clearPendingTlsFrame();
     currentNetworkType = networkType;
     isIpv6 = ipv6;
     currentAddress = address;
     currentPort = port;
     waitingForHostResolve = "";
     adjustWriteOpAfterResolve = false;
+    currentSecret = "";
+    currentSecretDomain = "";
     tlsState = 0;
+    mtproxySocketConnectedLogged = false;
     ConnectionsManager::getInstance(instanceNum).attachConnection(this);
 
     memset(&socketAddress, 0, sizeof(sockaddr_in));
@@ -704,27 +852,17 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
     }
 
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d domain_len=%d address=%s port=%u", this, (int) proxyAuthState, (int) currentSecretDomain.size(), currentAddress.c_str(), (unsigned int) currentPort);
     openConnectionInternal(ipv6);
 }
 
 void ConnectionSocket::openConnectionInternal(bool ipv6) {
     if (proxyAuthState >= 10) {
-        pthread_mutex_lock(&proxyJitterMutex);
-        int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-        int64_t elapsed = now - lastProxyConnectTime;
-        if (elapsed < 1200) {
-            int delay = 500 + (rand() % 501);
-            if (LOGS_ENABLED) DEBUG_D("connection(%p) jitter: elapsed=%ld, delay=%d", this, (long) elapsed, delay);
-            lastProxyConnectTime = now + delay;
-            struct timespec ts;
-            ts.tv_sec = delay / 1000;
-            ts.tv_nsec = (delay % 1000) * 1000000L;
-            nanosleep(&ts, nullptr);
-        } else {
-            if (LOGS_ENABLED) DEBUG_D("connection(%p) jitter: elapsed=%ld, no delay", this, (long) elapsed);
-            lastProxyConnectTime = now;
+        if (proxyPacingReady) {
+            proxyPacingReady = false;
+        } else if (scheduleProxyPacingIfNeeded(ipv6)) {
+            return;
         }
-        pthread_mutex_unlock(&proxyJitterMutex);
     }
     int epolFd = ConnectionsManager::getInstance(instanceNum).epolFd;
     int yes = 1;
@@ -747,6 +885,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         return;
     }
 
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup socket_connect_start ipv6=%d state=%d", this, ipv6 ? 1 : 0, (int) proxyAuthState);
     if (connect(socketFd, (ipv6 ? (sockaddr *) &socketAddress6 : (sockaddr *) &socketAddress), (socklen_t) (ipv6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in))) == -1 && errno != EINPROGRESS) {
         closeSocket(1, -1);
     } else {
@@ -779,6 +918,8 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
 
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d error=%d proxy_state=%d tls_state=%d bytes_read=%zu pending=%u/%u", this, reason, error, (int) proxyAuthState, (int) tlsState, bytesRead, pendingTlsFrameOffset, pendingTlsFrameSize);
+    cancelProxyPacing();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);
     if (socketFd >= 0) {
         epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
@@ -792,6 +933,8 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     proxyAuthState = 0;
     tlsState = 0;
     onConnectedSent = false;
+    mtproxySocketConnectedLogged = false;
+    clearPendingTlsFrame();
     outgoingByteStream->clean();
     if (tlsBuffer != nullptr) {
         tlsBuffer->reuse();
@@ -884,7 +1027,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                                 if (LOGS_ENABLED) DEBUG_E("connection(%p) TLS hash mismatch", this);
                                 return;
                             }
-                            if (LOGS_ENABLED) DEBUG_D("connection(%p) TLS hello complete", this);
+                            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup server_hello_hmac_ok bytes=%zu len1=%zu len2=%zu", this, newBytesRead, len1, len2);
                             tlsState = 1;
                             proxyAuthState = 0;
                             bytesRead = 0;
@@ -1027,6 +1170,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
             closeSocket(1, error);
             return;
         } else {
+            if (!mtproxySocketConnectedLogged && (proxyAuthState >= 10 || tlsState != 0)) {
+                mtproxySocketConnectedLogged = true;
+                if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup socket_connected state=%d tls=%d", this, (int) proxyAuthState, (int) tlsState);
+            }
             if (proxyAuthState != 0) {
                 if (proxyAuthState >= 10) {
                     if (proxyAuthState == 10) {
@@ -1046,11 +1193,13 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         memcpy(tempBuffer->bytes + 11, tempBuffer->bytes + 64 * 1024, 32);
                         bytesRead = 0;
 
-                        if (send(socketFd, tempBuffer->bytes, size, 0) < 0) {
+                        ssize_t sentLength = send(socketFd, tempBuffer->bytes, size, 0);
+                        if (sentLength < 0) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) send failed", this);
                             closeSocket(1, -1);
                             return;
                         }
+                        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup client_hello_sent bytes=%d expected=%u domain_len=%d", this, (int) sentLength, size, (int) currentSecretDomain.size());
                         adjustWriteOp();
                     }
                 } else {
@@ -1111,49 +1260,32 @@ void ConnectionSocket::onEvent(uint32_t events) {
             } else {
                 if (!onConnectedSent) {
                     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-                    if (LOGS_ENABLED) DEBUG_D("connection(%p) reset last event time, on connect", this);
+                    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup on_connected tls=%d", this, (int) tlsState);
                     onConnected();
                     onConnectedSent = true;
                 }
+                if (tlsState != 0 && pendingTlsFrame != nullptr) {
+                    if (!sendPendingTlsFrame()) {
+                        return;
+                    }
+                    if (pendingTlsFrame != nullptr) {
+                        return;
+                    }
+                }
+
                 NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
                 buffer->clear();
                 outgoingByteStream->get(buffer);
                 buffer->flip();
-
                 uint32_t remaining = buffer->remaining();
                 if (remaining) {
                     ssize_t sentLength;
                     if (tlsState != 0) {
-                        if (remaining > 2878) {
-                            remaining = 2878;
-                        }
-                        size_t headersSize = 0;
-                        if (tlsState == 1) {
-                            static std::string header1 = std::string("\x14\x03\x03\x00\x01\x01", 6);
-                            std::memcpy(tempBuffer->bytes, header1.data(), header1.size());
-                            headersSize += header1.size();
-                            tlsState = 2;
-                        }
-                        static std::string header2 = std::string("\x17\x03\x03", 3);
-                        std::memcpy(tempBuffer->bytes + headersSize, header2.data(), header2.size());
-                        headersSize += header2.size();
-
-                        tempBuffer->bytes[headersSize] = static_cast<uint8_t>((remaining >> 8) & 0xff);
-                        tempBuffer->bytes[headersSize + 1] = static_cast<uint8_t>(remaining & 0xff);
-                        headersSize += 2;
-
-                        std::memcpy(tempBuffer->bytes + headersSize, buffer->bytes(), remaining);
-
-                        if ((sentLength = send(socketFd, tempBuffer->bytes, headersSize + remaining, 0)) < headersSize) {
-                            if (LOGS_ENABLED) DEBUG_E("connection(%p) send failed", this);
-                            closeSocket(1, -1);
+                        if (!buildPendingTlsFrame(buffer, remaining)) {
                             return;
-                        } else {
-                            if (ConnectionsManager::getInstance(instanceNum).delegate != nullptr) {
-                                ConnectionsManager::getInstance(instanceNum).delegate->onBytesSent((int32_t) sentLength, currentNetworkType, instanceNum);
-                            }
-                            outgoingByteStream->discard((uint32_t) (sentLength - headersSize));
-                            adjustWriteOp();
+                        }
+                        if (!sendPendingTlsFrame()) {
+                            return;
                         }
                     } else {
                         if ((sentLength = send(socketFd, buffer->bytes(), remaining, 0)) < 0) {
@@ -1205,7 +1337,8 @@ void ConnectionSocket::adjustWriteOp() {
         return;
     }
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
-    if (proxyAuthState == 0 && (outgoingByteStream->hasData() || !onConnectedSent) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10) {
+    bool hasPendingTlsFrame = pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize;
+    if ((proxyAuthState == 0 && (hasPendingTlsFrame || outgoingByteStream->hasData() || !onConnectedSent)) || proxyAuthState == 1 || proxyAuthState == 3 || proxyAuthState == 5 || proxyAuthState == 10) {
         eventMask.events |= EPOLLOUT;
     }
     eventMask.data.ptr = eventObject;
