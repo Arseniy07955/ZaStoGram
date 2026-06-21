@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import csv
+import re
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,8 @@ from analyze_mtproxy_markers import Attempt
 
 ROOT = Path(__file__).resolve().parents[1]
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
+SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
+DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 
 
 def require(condition, message):
@@ -18,7 +21,38 @@ def require(condition, message):
         sys.exit(1)
 
 
+def check_phase_contract():
+    socket = SOCKET.read_text(encoding="utf-8", errors="replace")
+    analyzer = ANALYZER.read_text(encoding="utf-8", errors="replace")
+    diagnostics = DIAGNOSTICS.read_text(encoding="utf-8", errors="replace")
+
+    diagnostic_values = set(re.findall(r'public static final String [A-Z0-9_]+ = "([a-z0-9_]+)";', diagnostics))
+    native_published = set(re.findall(r'publishProxyConnectionStage\("([a-z0-9_]+)"\)', socket))
+    native_terminal = set(re.findall(r'proxyCheckDiagnostic = "([a-z0-9_]+)";', socket))
+    mtproxy_terminal = native_terminal - {"wss_tls_handshake"}
+
+    require(
+        not (native_published - diagnostic_values),
+        f"Java proxy diagnostics must know every native-published MTProxy phase: {sorted(native_published - diagnostic_values)}",
+    )
+    require(
+        not (mtproxy_terminal - diagnostic_values),
+        f"Java proxy diagnostics must know every native MTProxy terminal phase: {sorted(mtproxy_terminal - diagnostic_values)}",
+    )
+    require(
+        "wss_tls_handshake" not in diagnostic_values,
+        "WSS TLS handshake is a WSS diagnostic and must not be mixed into the MTProxy GUI diagnostic map",
+    )
+    missing_analyzer = sorted(phase for phase in native_published | mtproxy_terminal if phase not in analyzer)
+    require(
+        not missing_analyzer,
+        f"MTProxy analyzer must know every native MTProxy phase used by GUI/logs: {missing_analyzer}",
+    )
+
+
 def main():
+    check_phase_contract()
+
     attempt = Attempt(key="synthetic")
     attempt.add(1, "connection(0x1) mtproxy_startup socket_connect_start ipv6=0 state=0")
     attempt.add(2, "connection(0x1) mtproxy_startup on_connected tls=0")
@@ -34,6 +68,11 @@ def main():
         handle.write(
             "logcat.txt:3: 06-20 15:00:00.000 connection(0x2) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
             "is_faketls=1 domain_len=17 profile=android_chrome connection_pattern=strict address=203.0.113.10 port=443\n"
+        )
+        handle.write(
+            "logcat.txt:3: 06-20 15:00:00.010 connection(0x2) mtproxy_startup admission_queue "
+            "admission_mode=strict connection_pattern=strict key=blocked.example:443:cdn.example "
+            "priority=20 active=1 max=1 queued=1\n"
         )
         handle.write("logcat.txt:4: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:5: connection(0x2) mtproxy_startup socket_connected elapsed=90\n")
@@ -294,6 +333,10 @@ def main():
     require(
         "patterns=strict=" in result.stdout,
         "analyzer burst summary must include connection-pattern mix",
+    )
+    require(
+        "admission_queue" in result.stdout,
+        "analyzer must preserve the queued-admission marker so GUI 'waiting slot' stalls are visible in logs",
     )
     require(
         "admission_tcp_failure_cooldown" in result.stdout,

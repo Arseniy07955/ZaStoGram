@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import subprocess
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,21 +160,14 @@ if "cancelProxyCheck(proxyInfo.proxyCheckPingId)" in scheduler_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: active native cancellation must use Request.nativePingId, not mutable ProxyInfo.proxyCheckPingId")
     sys.exit(1)
-direct_check_result = subprocess.run(
-    ["rg", "-l", r"\.checkProxy\(|native_checkProxy", str(ROOT / "TMessagesProj/src/main/java/org/telegram")],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    check=False,
-)
-if direct_check_result.returncode not in (0, 1):
-    print("Proxy check scheduler guard failed:")
-    print(f" - rg failed while checking direct proxy calls: {direct_check_result.stderr.strip()}")
-    sys.exit(1)
 allowed_direct_check_callers = {SCHEDULER.resolve(), JAVA_MANAGER.resolve()}
 direct_check_callers = []
-for item in direct_check_result.stdout.splitlines():
-    path = Path(item).resolve()
+direct_check_pattern = re.compile(r"\.checkProxy\(|native_checkProxy")
+for path in (ROOT / "TMessagesProj/src/main/java/org/telegram").rglob("*.java"):
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not direct_check_pattern.search(text):
+        continue
+    path = path.resolve()
     if path not in allowed_direct_check_callers:
         direct_check_callers.append(str(path.relative_to(ROOT)))
 if direct_check_callers:
