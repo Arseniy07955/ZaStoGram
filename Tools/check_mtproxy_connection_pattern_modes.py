@@ -191,6 +191,9 @@ def main() -> None:
     )
     require(
         "mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
+        and "host_resolve_failed" in connection_cpp
+        and "tcp_not_connected" in connection_cpp
+        and "network_block_suspected" in connection_cpp
         and "client_hello_sent_no_server_hello" in connection_cpp
         and "server_hello_hmac_mismatch" in connection_cpp
         and "mtproxy_startup reconnect_backoff" in connection_cpp
@@ -199,7 +202,7 @@ def main() -> None:
         and "connectionState == TcpConnectionStageIdle && connectionType != ConnectionTypeProxy && mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
         and "mtProxyReconnectBackoffMs" in connection_h
         and "mtProxyReconnectHoldUntil" in connection_h,
-        "Connection layer must back off FakeTLS post-ClientHello reconnects instead of restarting generic/media every second",
+        "Connection layer must back off MTProxy pre-TCP and handshake reconnects instead of restarting generic/media every second",
     )
     host_timer_index = socket_cpp.find("if (mode == MT_PROXY_HANDSHAKE_TIMER_HOST_RESOLVE)")
     host_request_index = socket_cpp.find("requestPendingHostResolve();", host_timer_index)
