@@ -16,6 +16,7 @@ CHECKS = [
     "check_mtproxy_data_layers.py",
     "check_mtproxy_endpoint_resilience_layers.py",
     "check_mtproxy_plain_dd_lifecycle.py",
+    "check_mtproxy_phase_contract.py",
     "check_mtproxy_resilience_contract.py",
     "check_mtproxy_rotation_and_soft_mux.py",
     "check_proxy_connection_live_stages.py",

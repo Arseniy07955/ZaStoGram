@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import sys
 
+from mtproxy_phase_contract import java_visible_live_phases, native_phase_names
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,21 +28,7 @@ FILES = {
     "scheduler": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java",
 }
 
-LIVE_PHASES = [
-    "admission_queue",
-    "host_resolve_start",
-    "connect_start",
-    "socket_connect_start",
-    "socket_connected",
-    "client_hello_sent",
-    "admission_hold_after_client_hello_failure",
-    "server_hello_hmac_ok",
-    "on_connected",
-    "first_tls_app_sent",
-    "first_tls_app_recv",
-    "first_mtproxy_packet_sent",
-    "first_mtproxy_packet_recv",
-]
+LIVE_PHASES = sorted(java_visible_live_phases() & native_phase_names())
 
 
 def text(name: str) -> str:
@@ -215,13 +203,27 @@ def main() -> None:
     )
     require(
         "boolean selectedAccountStage = currentAccount == UserConfig.selectedAccount;" in text("connections_java")
-        and "if (selectedAccountStage && currentProxy != null && concreteDiagnostic && currentProxyMatchesStage)" in text("connections_java"),
+        and "boolean stageTargetsCurrentProxy = currentProxy != null && concreteDiagnostic && currentProxyMatchesStage;" in text("connections_java")
+        and "if (selectedAccountStage && stageTargetsCurrentProxy)" in text("connections_java"),
         "native proxy live stages from background accounts must not overwrite the shared visible proxy diagnostic",
+    )
+    stage_callback = text("connections_java")
+    stage_callback = stage_callback[
+        stage_callback.find("public static void onProxyConnectionStageChanged"):
+        stage_callback.find("public static void onLogout", stage_callback.find("public static void onProxyConnectionStageChanged"))
+    ]
+    mark_failure_idx = stage_callback.find("ProxyCheckScheduler.markEndpointFailure(currentProxy, normalizedDiagnostic);")
+    selected_ui_idx = stage_callback.find("if (selectedAccountStage && stageTargetsCurrentProxy)")
+    require(
+        mark_failure_idx >= 0
+        and selected_ui_idx >= 0
+        and mark_failure_idx < selected_ui_idx,
+        "terminal endpoint failures from any account must update shared backoff before selected-account UI filtering",
     )
     require(
         "final String endpointKey" in text("connections_java")
         and "boolean currentProxyMatchesStage = ProxyCheckScheduler.matchesEndpointStageKey(currentProxy, endpointKey);" in text("connections_java")
-        and "if (selectedAccountStage && currentProxy != null && concreteDiagnostic && currentProxyMatchesStage)" in text("connections_java"),
+        and "if (selectedAccountStage && stageTargetsCurrentProxy)" in text("connections_java"),
         "native proxy live stages from stale endpoint/secret keys must not overwrite the currently selected proxy diagnostic",
     )
     require(

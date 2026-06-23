@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import sys
 
+from mtproxy_phase_contract import analyzer_failure_phases, java_phase_names
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,30 +23,6 @@ FILES = {
     "values_ru": ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml",
     "analyzer": ROOT / "Tools/analyze_mtproxy_markers.py",
 }
-
-
-REQUIRED_PHASES = [
-    "ok",
-    "checking",
-    "endpoint_cooldown",
-    "tcp_connect_gate",
-    "dns_coalesce_wait",
-    "dns_cache_hit",
-    "dns_cache_store",
-    "phase_adaptive_recipe",
-    "start_failed",
-    "host_resolve_failed",
-    "tcp_not_connected",
-    "tcp_connected_no_pong",
-    "client_hello_sent_no_server_hello",
-    "server_hello_hmac_mismatch",
-    "mtproxy_packet_sent_no_response",
-    "post_handshake_no_appdata",
-    "dropped_early_after_appdata",
-    "dropped_after_appdata",
-    "cancelled",
-    "unknown_fail",
-]
 
 
 def text(name):
@@ -79,7 +57,7 @@ def main():
     native_values = native_published_phases(text("socket"))
 
     require(diagnostics, "ProxyCheckDiagnostics.java must be the single Java source of truth for proxy-check phases")
-    for phase in REQUIRED_PHASES:
+    for phase in sorted(java_phase_names()):
         require(phase in diagnostics, f"ProxyCheckDiagnostics must define phase '{phase}'")
         require(phase in combined, f"phase '{phase}' must be used outside the diagnostics map")
     require(
@@ -131,20 +109,15 @@ def main():
         "case WAITING_TCP:" in live_phase,
         "waiting_tcp is a live waiting state and must not be classified as a failure",
     )
-    require(
-        "host_resolve_failed" in text("analyzer")
-        and "tcp_connected_no_pong" in text("analyzer")
-        and "client_hello_sent_no_server_hello" in text("analyzer")
-        and "dropped_early_after_appdata" in text("analyzer"),
-        "log analyzer must use the same diagnostic phase names as the GUI",
-    )
     analyzer = text("analyzer")
+    for phase in sorted(analyzer_failure_phases()):
+        require(phase in analyzer, f"log analyzer must know contract failure phase '{phase}'")
     failure_verdicts_match = re.search(r"FAKETLS_FAILURE_VERDICTS = \{(?P<body>.*?)\n\}", analyzer, re.S)
     require(failure_verdicts_match is not None, "analyzer must expose explicit FakeTLS failure verdicts")
     analyzer_failure_verdicts = set(re.findall(r'"([a-z0-9_]+)"', failure_verdicts_match.group("body")))
     require(
-        analyzer_failure_verdicts <= java_values,
-        "analyzer FakeTLS failure verdicts missing from ProxyCheckDiagnostics: " + ", ".join(sorted(analyzer_failure_verdicts - java_values)),
+        analyzer_failure_verdicts == analyzer_failure_phases(),
+        "analyzer FakeTLS failure verdicts must match mtproxy_phase_contract: " + ", ".join(sorted(analyzer_failure_verdicts ^ analyzer_failure_phases())),
     )
     require("-1001" not in combined and "-1002" not in combined, "diagnostics must not use magic negative IDs")
     require(

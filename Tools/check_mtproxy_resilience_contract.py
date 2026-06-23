@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 
+from mtproxy_phase_contract import analyzer_failure_phases
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -190,13 +192,7 @@ def main() -> None:
     )
 
     # GUI/log analyzer must expose the same phase vocabulary immediately.
-    for phase in (
-        "host_resolve_failed",
-        "tcp_not_connected",
-        "client_hello_sent_no_server_hello",
-        "mtproxy_packet_sent_no_response",
-        "endpoint_cooldown",
-    ):
+    for phase in sorted(analyzer_failure_phases() | {"endpoint_cooldown"}):
         require(phase in diagnostics, f"ProxyCheckDiagnostics must know {phase}")
         require(phase in analyzer, f"analyzer must know {phase}")
     require(

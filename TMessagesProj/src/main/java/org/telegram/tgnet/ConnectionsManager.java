@@ -891,7 +891,11 @@ public class ConnectionsManager extends BaseController {
                     || (ProxyCheckDiagnostics.isFailure(normalizedDiagnostic) && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedDiagnostic));
             boolean selectedAccountStage = currentAccount == UserConfig.selectedAccount;
             boolean currentProxyMatchesStage = ProxyCheckScheduler.matchesEndpointStageKey(currentProxy, endpointKey);
-            if (selectedAccountStage && currentProxy != null && concreteDiagnostic && currentProxyMatchesStage) {
+            boolean stageTargetsCurrentProxy = currentProxy != null && concreteDiagnostic && currentProxyMatchesStage;
+            if (stageTargetsCurrentProxy && ProxyCheckDiagnostics.shouldAccelerateProxyRotation(normalizedDiagnostic)) {
+                ProxyCheckScheduler.markEndpointFailure(currentProxy, normalizedDiagnostic);
+            }
+            if (selectedAccountStage && stageTargetsCurrentProxy) {
                 if (ProxyCheckDiagnostics.isProxyUsableSuccessPhase(normalizedDiagnostic)) {
                     ProxyCheckScheduler.markConnectionUsable(currentProxy, normalizedDiagnostic);
                 } else if (!ProxyCheckDiagnostics.shouldKeepFreshFailure(currentProxy, normalizedDiagnostic)) {
@@ -899,9 +903,6 @@ public class ConnectionsManager extends BaseController {
                     currentProxy.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();
                 } else if (BuildVars.LOGS_ENABLED) {
                     FileLog.d("proxy_connection_stage_held account=" + currentAccount + " phase=" + normalizedDiagnostic + " held_by=" + currentProxy.lastCheckDiagnostic);
-                }
-                if (ProxyCheckDiagnostics.shouldAccelerateProxyRotation(normalizedDiagnostic)) {
-                    ProxyCheckScheduler.markEndpointFailure(currentProxy, normalizedDiagnostic);
                 }
             } else if (selectedAccountStage && currentProxy != null && concreteDiagnostic && BuildVars.LOGS_ENABLED) {
                 FileLog.d("proxy_connection_stage_ignored account=" + currentAccount + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " current=" + ProxyCheckScheduler.endpointStageKeyForLiveStage(currentProxy));

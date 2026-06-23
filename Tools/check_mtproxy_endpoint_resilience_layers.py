@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 
+from mtproxy_phase_contract import java_visible_live_phases, native_phase_names
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,14 +18,7 @@ FILES = {
     "analyzer": ROOT / "Tools/analyze_mtproxy_markers.py",
 }
 
-REQUIRED_PHASES = [
-    "endpoint_cooldown",
-    "tcp_connect_gate",
-    "dns_coalesce_wait",
-    "dns_cache_hit",
-    "dns_cache_store",
-    "phase_adaptive_recipe",
-]
+REQUIRED_PHASES = sorted(java_visible_live_phases() & native_phase_names())
 
 
 def read(name):

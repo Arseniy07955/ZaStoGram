@@ -3,6 +3,8 @@ from pathlib import Path
 import re
 import sys
 
+from mtproxy_phase_contract import ENDPOINT_NETWORK, endpoint_key_phases, rotation_phases
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
@@ -302,14 +304,7 @@ if (
     sys.exit(1)
 state_key_method = scheduler_text[scheduler_text.find("private static String endpointStateKeyForDiagnostic"):]
 state_key_method = state_key_method[:state_key_method.find("\n    private static", 1)]
-for phase in (
-    "HOST_RESOLVE_FAILED",
-    "TCP_NOT_CONNECTED",
-    "NETWORK_BLOCK_SUSPECTED",
-    "TCP_CONNECTED_NO_PONG",
-    "MTPROXY_PACKET_SENT_NO_RESPONSE",
-    "DROPPED_EARLY_AFTER_APPDATA",
-):
+for phase in sorted(name.upper() for name in endpoint_key_phases(ENDPOINT_NETWORK)):
     if phase not in state_key_method:
         print("Proxy check scheduler guard failed:")
         print(f" - {SCHEDULER.relative_to(ROOT)}: endpointStateKeyForDiagnostic must use host/port state for {phase}")
@@ -412,17 +407,7 @@ if passive_cooldown_index == -1 or passive_unchecked_index == -1 or passive_cool
     sys.exit(1)
 accelerate_method = diagnostics_text[diagnostics_text.find("public static boolean shouldAccelerateProxyRotation"):]
 accelerate_method = accelerate_method[:accelerate_method.find("\n    public static", 1)]
-for phase in (
-    "HOST_RESOLVE_FAILED",
-    "TCP_NOT_CONNECTED",
-    "TCP_CONNECTED_NO_PONG",
-    "NETWORK_BLOCK_SUSPECTED",
-    "CLIENT_HELLO_SENT_NO_SERVER_HELLO",
-    "SERVER_HELLO_HMAC_MISMATCH",
-    "MTPROXY_PACKET_SENT_NO_RESPONSE",
-    "POST_HANDSHAKE_NO_APPDATA",
-    "DROPPED_EARLY_AFTER_APPDATA",
-):
+for phase in sorted(name.upper() for name in rotation_phases()):
     if phase not in accelerate_method:
         print("Proxy check scheduler guard failed:")
         print(f" - {DIAGNOSTICS.relative_to(ROOT)}: terminal phase {phase} must accelerate fallback rotation")

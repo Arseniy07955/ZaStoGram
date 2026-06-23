@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 
+from mtproxy_phase_contract import reconnect_backoff_phases
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
@@ -193,13 +195,10 @@ def main() -> None:
         connection_cpp.find("static bool mtProxyDiagnosticNeedsReconnectBackoff"):
         connection_cpp.find("static uint32_t mtProxyReconnectBackoffBaseMs")
     ]
+    expected_reconnect_backoff = reconnect_backoff_phases()
     require(
         "mtProxyDiagnosticNeedsReconnectBackoff" in connection_cpp
-        and "host_resolve_failed" in reconnect_backoff
-        and "tcp_not_connected" in reconnect_backoff
-        and "client_hello_sent_no_server_hello" in reconnect_backoff
-        and "server_hello_hmac_mismatch" in reconnect_backoff
-        and "dropped_early_after_appdata" in reconnect_backoff
+        and all(f'"{phase}"' in reconnect_backoff for phase in expected_reconnect_backoff)
         and "mtproxy_startup reconnect_backoff" in connection_cpp
         and "mtproxy_startup reconnect_hold" in connection_cpp
         and "getProxyCheckDiagnostic()" in connection_cpp
