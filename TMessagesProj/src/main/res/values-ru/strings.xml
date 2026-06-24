@@ -291,6 +291,7 @@
     <string name="ProxyStatusUnchecked">Не проверено</string>
     <string name="ProxyStatusNotRespondingNow">Сейчас не отвечает</string>
     <string name="ProxyStatusStartFailed">Проверка не запустилась</string>
+    <string name="ProxyStatusConnectingTimeout">Подключение к прокси не успело завершиться</string>
     <string name="ProxyStatusHostResolveFailed">Не удалось найти адрес прокси</string>
     <string name="ProxyStatusTcpNotConnected">TCP не открылся: сервер или порт недоступен</string>
     <string name="ProxyStatusTcpConnectedNoPong">TCP открылся, но MTProxy не ответил</string>

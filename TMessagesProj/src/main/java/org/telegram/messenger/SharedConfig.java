@@ -407,6 +407,13 @@ public class SharedConfig {
         return path.charAt(0) == '/' ? path : "/" + path;
     }
 
+    private static int clampProxyRotationTimeout(int timeoutIndex) {
+        if (timeoutIndex < 0 || timeoutIndex >= ProxyRotationController.ROTATION_TIMEOUTS.size()) {
+            return ProxyRotationController.DEFAULT_TIMEOUT_INDEX;
+        }
+        return timeoutIndex;
+    }
+
     public static void setWssTransport(int mode, String host, int port, String path, boolean miniApps) {
         wssTransportMode = normalizeWssTransportMode(mode);
         wssHost = host != null ? host : "";
@@ -536,6 +543,7 @@ public class SharedConfig {
                 editor.putInt("lockRecordAudioVideoHint", lockRecordAudioVideoHint);
                 editor.putString("storageCacheDir", !TextUtils.isEmpty(storageCacheDir) ? storageCacheDir : "");
                 editor.putBoolean("proxyRotationEnabled", proxyRotationEnabled);
+                proxyRotationTimeout = clampProxyRotationTimeout(proxyRotationTimeout);
                 editor.putInt("proxyRotationTimeout", proxyRotationTimeout);
                 editor.putBoolean("mtProxyClientHelloFragmentation", mtProxyClientHelloFragmentation);
                 editor.putBoolean("mtProxySoftMux", mtProxySoftMux);
@@ -615,7 +623,7 @@ public class SharedConfig {
             passportConfigHash = preferences.getInt("passportConfigHash", 0);
             storageCacheDir = preferences.getString("storageCacheDir", null);
             proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
-            proxyRotationTimeout = preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX);
+            proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
             mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
             if (preferences.contains("mtProxyConnectionPatternMode")) {
@@ -1526,6 +1534,16 @@ public class SharedConfig {
                 && password.equals(info.password);
     }
 
+    private static boolean sameProxyIdentity(ProxyInfo info, String address, int port, String username, String password, String proxySecret) {
+        return info != null
+                && !TextUtils.isEmpty(address)
+                && address.equals(info.address)
+                && port == info.port
+                && username.equals(info.username)
+                && password.equals(info.password)
+                && proxySecret.equals(info.secret);
+    }
+
     public static void loadProxyList() {
         if (proxyListLoaded) {
             return;
@@ -1592,10 +1610,8 @@ public class SharedConfig {
                         }
 
                         proxyList.add(0, info);
-                        if (currentProxy == null && !TextUtils.isEmpty(proxyAddress)) {
-                            if (proxyAddress.equals(info.address) && proxyPort == info.port && proxyUsername.equals(info.username) && proxyPassword.equals(info.password)) {
-                                currentProxy = info;
-                            }
+                        if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
+                            currentProxy = info;
                         }
                         if (currentWssSocksProxy == null && samePlainSocksProxy(info, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)) {
                             currentWssSocksProxy = info;
@@ -1613,10 +1629,8 @@ public class SharedConfig {
                             data.readString(false),
                             data.readString(false));
                     proxyList.add(0, info);
-                    if (currentProxy == null && !TextUtils.isEmpty(proxyAddress)) {
-                        if (proxyAddress.equals(info.address) && proxyPort == info.port && proxyUsername.equals(info.username) && proxyPassword.equals(info.password)) {
-                            currentProxy = info;
-                        }
+                    if (currentProxy == null && sameProxyIdentity(info, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret)) {
+                        currentProxy = info;
                     }
                     if (currentWssSocksProxy == null && samePlainSocksProxy(info, wssSocksAddress, wssSocksPort, wssSocksUsername, wssSocksPassword)) {
                         currentWssSocksProxy = info;

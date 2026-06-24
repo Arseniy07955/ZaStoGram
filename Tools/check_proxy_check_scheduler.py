@@ -15,6 +15,7 @@ PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivi
 PROXY_SETTINGS = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxySettingsActivity.java"
 ANDROID_UTILITIES = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java"
 ROTATION = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRotationController.java"
+ENGINE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRotationEngine.java"
 JAVA_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 README = ROOT / "README.md"
@@ -81,12 +82,12 @@ checks = [
     (PROXY_LIST, "ProxyCheckScheduler.cancelOwner(this)", "proxy list must cancel queued checks on destroy"),
     (PROXY_SETTINGS, "ProxyCheckScheduler.markConnectionStarting(currentProxyInfo)", "proxy settings save must clear stale visible failures before applying enabled proxy settings"),
     (ANDROID_UTILITIES, "ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy)", "proxy link add/apply must clear stale visible failures before applying enabled proxy settings"),
-    (ROTATION, "ProxyRuntimeStateStore.isFresh", "proxy rotation must not switch to stale availability results"),
+    (ENGINE, "ProxyRuntimeStateStore.isFresh", "proxy rotation must not switch to stale availability results"),
     (ROTATION, "ProxyRuntimeStateStore.markConnected(SharedConfig.currentProxy)", "proxy rotation must share connected-state freshness with the runtime store"),
     (ROTATION, "ProxyRuntimeStateStore.markConnectionStarting(info)", "proxy rotation must publish a fresh starting phase before applying a fallback proxy"),
-    (ROTATION, "selectFallbackCandidate", "proxy rotation must try one unchecked endpoint through a real connection instead of full-list proxy checks"),
+    (ENGINE, "selectFallbackCandidate", "proxy rotation must try one unchecked endpoint through a real connection instead of full-list proxy checks"),
     (ROTATION, "switch fallback endpoint=", "proxy rotation must log one-at-a-time fallback switches distinctly"),
-    (ROTATION, "isCheckScheduled", "proxy rotation must not schedule duplicate delayed sweeps"),
+    (ROTATION, "engine.hasScheduledAttempt", "proxy rotation must not schedule duplicate delayed sweeps"),
     (ROTATION, "TERMINAL_STAGE_SWITCH_DELAY_MS", "proxy rotation must accelerate fallback after terminal MTProxy startup phases"),
     (ROTATION, "NotificationCenter.proxyConnectionStageChanged", "proxy rotation must observe concrete MTProxy startup stages"),
     (ROTATION, "ProxyRuntimeStateStore.shouldScheduleFallback", "proxy rotation must use the runtime store to decide terminal phases"),
@@ -99,6 +100,8 @@ checks = [
     (STORE, "ProxyCheckDiagnostics.hasFreshEndpointCooldown(info)", "proxy rotation must not fallback-switch to an endpoint still in native cooldown"),
     (STORE, "ProxyCheckDiagnostics.hasFreshUnresolvedLivePhase(info)", "proxy rotation must not fallback-switch to an endpoint still proving its proxy data path"),
     (STORE, "isEndpointBackedOff(info)", "proxy rotation must not fallback-switch to an endpoint still in scheduler backoff"),
+    (ENGINE, "triedExactKeys.contains", "proxy rotation must not retry the same endpoint within one rotation cycle"),
+    (ENGINE, "MAX_SWITCHES_PER_WINDOW", "proxy rotation must enforce a global switch rate limit"),
     (README, "Java backoff использует ту же фазовую идею ключей", "README must document Java scheduler phase-aware endpoint keys"),
     (README, "host:port:username:password:secret", "README must document exact-key proxy-check coalescing"),
     (README, "generic `Connected`", "README must document that generic connected-state observations do not erase fresh terminal proxy phases"),
@@ -478,15 +481,16 @@ def require_cancel_order(marker, label):
     )
     branch_text = rotation_text[branch_start:marker_index]
     ordered_needles = [
-        "AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);",
-        "isCheckScheduled = false;",
+        "cancelScheduledSwitch(",
     ]
+    if label == "settings_changed":
+        ordered_needles.append("engine.onSettingsChanged();")
     last_index = -1
     for needle in ordered_needles:
         needle_index = branch_text.find(needle)
         if needle_index == -1 or needle_index <= last_index:
             print("Proxy check scheduler guard failed:")
-            print(f" - {ROTATION.relative_to(ROOT)}: proxy rotation must cancel timer, clear flags, then cancel native check on {label}")
+            print(f" - {ROTATION.relative_to(ROOT)}: proxy rotation must cancel the scheduled engine attempt before logging cancellation on {label}")
             sys.exit(1)
         last_index = needle_index
 

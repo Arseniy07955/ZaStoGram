@@ -107,6 +107,7 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.CLIENT_HELLO_SENT_NO_SERVER_HELLO:
             case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
             case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
+            case ProxyCheckDiagnostics.CONNECTING_TIMEOUT:
                 return failure(KeyScope.EXACT, true, true);
 
             case ProxyCheckDiagnostics.START_FAILED:

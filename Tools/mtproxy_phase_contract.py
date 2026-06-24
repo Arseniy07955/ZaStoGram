@@ -53,6 +53,7 @@ PHASES = (
     MtProxyPhase("first_mtproxy_packet_recv", PHASE_SUCCESS, native=True, java=True, analyzer=False, endpoint_key=ENDPOINT_NETWORK),
 
     MtProxyPhase("start_failed", PHASE_FAILURE, native=False, java=True, analyzer=False, endpoint_key=ENDPOINT_NONE),
+    MtProxyPhase("connecting_timeout", PHASE_FAILURE, native=False, java=True, analyzer=False, endpoint_key=ENDPOINT_EXACT, rotation=True),
     MtProxyPhase("host_resolve_failed", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("tcp_not_connected", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("tcp_connected_no_pong", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),

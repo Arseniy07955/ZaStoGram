@@ -26,6 +26,7 @@ CHECKS = [
     "check_mtproxy_runtime_log_contract.py",
     "check_proxy_connection_live_stages.py",
     "check_proxy_control_plane_policy.py",
+    "check_proxy_rotation_engine.py",
     "check_proxy_check_diagnostics.py",
     "check_proxy_ui_messages.py",
     "check_proxy_check_scheduler.py",

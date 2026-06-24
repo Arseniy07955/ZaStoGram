@@ -108,9 +108,8 @@ def main() -> int:
     require_text(STRINGS, 'name="ProxyStatusConnectingTimeout"', "English strings must include connecting timeout status", failures)
     require_text(STRINGS_RU, 'name="ProxyStatusConnectingTimeout"', "Russian strings must include connecting timeout status", failures)
 
-    timeout_load = re.search(r"proxyRotationTimeout = preferences\.getInt\([^;]+;", shared_config)
     require(
-        timeout_load is not None and "clampProxyRotationTimeout" in shared_config,
+        "proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt" in shared_config,
         f"{SHARED_CONFIG.relative_to(ROOT)}: loaded proxyRotationTimeout must be clamped",
         failures,
     )

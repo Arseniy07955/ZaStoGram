@@ -34,6 +34,7 @@ public class ProxyCheckDiagnostics {
     public static final String FIRST_MTPROXY_PACKET_RECV = "first_mtproxy_packet_recv";
     public static final String WAITING_TCP = "waiting_tcp";
     public static final String START_FAILED = "start_failed";
+    public static final String CONNECTING_TIMEOUT = "connecting_timeout";
     public static final String HOST_RESOLVE_FAILED = "host_resolve_failed";
     public static final String TCP_NOT_CONNECTED = "tcp_not_connected";
     public static final String TCP_CONNECTED_NO_PONG = "tcp_connected_no_pong";
@@ -75,6 +76,7 @@ public class ProxyCheckDiagnostics {
             case FIRST_MTPROXY_PACKET_RECV:
             case WAITING_TCP:
             case START_FAILED:
+            case CONNECTING_TIMEOUT:
             case HOST_RESOLVE_FAILED:
             case TCP_NOT_CONNECTED:
             case TCP_CONNECTED_NO_PONG:
@@ -316,6 +318,8 @@ public class ProxyCheckDiagnostics {
                 return title("ProxyStatusWaitingTcp", R.string.ProxyStatusWaitingTcp);
             case START_FAILED:
                 return title("ProxyStatusStartFailed", R.string.ProxyStatusStartFailed);
+            case CONNECTING_TIMEOUT:
+                return title("ProxyStatusConnectingTimeout", R.string.ProxyStatusConnectingTimeout);
             case HOST_RESOLVE_FAILED:
                 return title("ProxyStatusHostResolveFailed", R.string.ProxyStatusHostResolveFailed);
             case TCP_NOT_CONNECTED:
@@ -423,6 +427,8 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
             case START_FAILED:
                 return LocaleController.getString(R.string.ProxyStatusStartFailed);
+            case CONNECTING_TIMEOUT:
+                return LocaleController.getString(R.string.ProxyStatusConnectingTimeout);
             case HOST_RESOLVE_FAILED:
                 return LocaleController.getString(R.string.ProxyStatusHostResolveFailed);
             case TCP_NOT_CONNECTED:

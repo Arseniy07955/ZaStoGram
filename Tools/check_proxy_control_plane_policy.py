@@ -16,6 +16,7 @@ POLICY = MESSENGER / "ProxyPhasePolicy.java"
 STORE = MESSENGER / "ProxyRuntimeStateStore.java"
 SCHEDULER = MESSENGER / "ProxyCheckScheduler.java"
 ROTATION = MESSENGER / "ProxyRotationController.java"
+ENGINE = MESSENGER / "ProxyRotationEngine.java"
 CONNECTIONS = JAVA_ROOT / "tgnet/ConnectionsManager.java"
 DIAGNOSTICS = MESSENGER / "ProxyCheckDiagnostics.java"
 
@@ -52,6 +53,7 @@ def main() -> int:
     store = require_file(STORE, failures)
     scheduler = read(SCHEDULER)
     rotation = read(ROTATION)
+    engine = require_file(ENGINE, failures)
     connections = read(CONNECTIONS)
     diagnostics = read(DIAGNOSTICS)
 
@@ -123,11 +125,18 @@ def main() -> int:
     require_not(connections, "currentProxy.lastCheckDiagnostic = normalizedDiagnostic", "ConnectionsManager must not write visible diagnostics directly", failures)
     require_not(connections, "ProxyCheckScheduler.markEndpointFailure(currentProxy", "ConnectionsManager must not decide live endpoint backoff directly", failures)
 
-    require(rotation, "ProxyRuntimeStateStore.isSwitchableCandidate(info)", "ProxyRotationController must ask store for switchable candidates", failures)
+    require(rotation, "ProxyRotationEngine engine = new ProxyRotationEngine()", "ProxyRotationController must delegate rotation choices to ProxyRotationEngine", failures)
+    require(rotation, "engine.beginScheduledAttempt", "ProxyRotationController must schedule generation-guarded engine attempts", failures)
+    require(rotation, "engine.completeScheduledAttempt", "ProxyRotationController must complete scheduled rotation attempts through the engine", failures)
     require(rotation, "ProxyRuntimeStateStore.shouldScheduleFallback", "ProxyRotationController must ask store before scheduling terminal fallback", failures)
     require(rotation, "ProxyRuntimeStateStore.markConnectionStarting(info)", "ProxyRotationController must publish connect_start through the store", failures)
     require_not(rotation, "ProxyCheckDiagnostics.shouldAccelerateProxyRotation(diagnostic)", "ProxyRotationController must not use raw diagnostic rotation policy", failures)
     require_not(rotation, "ProxyCheckDiagnostics.hasFreshFailure(info)", "ProxyRotationController candidate filtering must not duplicate store policy", failures)
+
+    require(engine, "ProxyRuntimeStateStore.isSwitchableCandidate(info)", "ProxyRotationEngine must ask store for switchable candidates", failures)
+    require(engine, "ProxyRuntimeStateStore.markEndpointFailure(currentProxy, ProxyCheckDiagnostics.CONNECTING_TIMEOUT)", "ProxyRotationEngine must convert connecting timeout into endpoint backoff", failures)
+    require(engine, "triedExactKeys", "ProxyRotationEngine must track endpoints tried in the current cycle", failures)
+    require(engine, "MAX_SWITCHES_PER_WINDOW", "ProxyRotationEngine must enforce global rotation rate limits", failures)
 
     require(diagnostics, "ProxyPhasePolicy.isFailure", "ProxyCheckDiagnostics must delegate failure classification to ProxyPhasePolicy", failures)
     require(diagnostics, "ProxyPhasePolicy.isLivePhase", "ProxyCheckDiagnostics must delegate live classification to ProxyPhasePolicy", failures)

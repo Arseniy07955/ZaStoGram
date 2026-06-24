@@ -3,9 +3,7 @@ package org.telegram.messenger;
 import android.content.SharedPreferences;
 import org.telegram.tgnet.ConnectionsManager;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 
 public class ProxyRotationController implements NotificationCenter.NotificationCenterDelegate {
@@ -17,69 +15,15 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
             5, 10, 15, 30, 60
     );
 
-    private boolean isCheckScheduled;
-
-    private Runnable checkProxyAndSwitchRunnable = () -> {
-        isCheckScheduled = false;
-        log("scheduled_check skipped background_disabled");
-        switchToAvailable();
-    };
+    private final ProxyRotationEngine engine = new ProxyRotationEngine();
+    private Runnable scheduledSwitchRunnable;
 
     public static void init() {
         INSTANCE.initInternal();
     }
 
-    @SuppressWarnings("ComparatorCombinators")
-    private void switchToAvailable() {
-        if (!SharedConfig.proxyRotationEnabled) {
-            log("skip_switch rotation_disabled");
-            return;
-        }
-
-        SharedConfig.ProxyInfo info = selectFreshAvailableCandidate();
-        String switchReason = "fresh";
-        if (info == null) {
-            info = selectFallbackCandidate();
-            switchReason = "fallback";
-        }
-        if (info == null) {
-            log("no_candidate");
-            return;
-        }
-
-        switchToProxy(info, switchReason);
-    }
-
-    private SharedConfig.ProxyInfo selectFreshAvailableCandidate() {
-        List<SharedConfig.ProxyInfo> sortedList = new ArrayList<>(SharedConfig.proxyList);
-        Collections.sort(sortedList, (o1, o2) -> Long.compare(o1.ping, o2.ping));
-        for (SharedConfig.ProxyInfo info : sortedList) {
-            if (!isSwitchableCandidate(info) || !info.available || !ProxyRuntimeStateStore.isFresh(info)) {
-                continue;
-            }
-            return info;
-        }
-        return null;
-    }
-
-    private SharedConfig.ProxyInfo selectFallbackCandidate() {
-        int count = SharedConfig.proxyList.size();
-        int currentIndex = SharedConfig.currentProxy != null ? SharedConfig.proxyList.indexOf(SharedConfig.currentProxy) : -1;
-        for (int offset = 1; offset <= count; offset++) {
-            int index = (currentIndex + offset + count) % count;
-            SharedConfig.ProxyInfo info = SharedConfig.proxyList.get(index);
-            if (isSwitchableCandidate(info)) {
-                return info;
-            }
-        }
-        return null;
-    }
-
-    private boolean isSwitchableCandidate(SharedConfig.ProxyInfo info) {
-        return ProxyRuntimeStateStore.isSwitchableCandidate(info);
-    }
-
     private void switchToProxy(SharedConfig.ProxyInfo info, String reason) {
+        engine.recordSwitch(info);
         SharedPreferences.Editor editor = MessagesController.getGlobalMainSettings().edit();
         editor.putString("proxy_ip", info.address);
         editor.putString("proxy_pass", info.password);
@@ -116,8 +60,8 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
         if (id == NotificationCenter.proxySettingsChanged) {
-            AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);
-            isCheckScheduled = false;
+            cancelScheduledSwitch("settings_changed");
+            engine.onSettingsChanged();
             log("cancel settings_changed");
         } else if (id == NotificationCenter.didUpdateConnectionState && account == UserConfig.selectedAccount) {
             if (!SharedConfig.isProxyEnabled() || !SharedConfig.proxyRotationEnabled || SharedConfig.proxyList.size() <= 1) {
@@ -127,16 +71,17 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
             int state = ConnectionsManager.getInstance(account).getConnectionState();
 
             if (state == ConnectionsManager.ConnectionStateConnectingToProxy) {
-                if (!isCheckScheduled) {
-                    log("schedule_after_connecting timeout_s=" + ROTATION_TIMEOUTS.get(SharedConfig.proxyRotationTimeout));
-                    scheduleSwitch(ROTATION_TIMEOUTS.get(SharedConfig.proxyRotationTimeout) * 1000L, "connecting_timeout");
+                if (!engine.hasScheduledAttempt()) {
+                    long timeoutMs = rotationTimeoutMillis();
+                    log("schedule_after_connecting timeout_s=" + (timeoutMs / 1000L));
+                    scheduleSwitch(timeoutMs, ProxyCheckDiagnostics.CONNECTING_TIMEOUT);
                 }
             } else {
                 if ((state == ConnectionsManager.ConnectionStateConnected || state == ConnectionsManager.ConnectionStateUpdating) && SharedConfig.currentProxy != null) {
                     ProxyRuntimeStateStore.markConnected(SharedConfig.currentProxy);
+                    engine.onConnected();
                 }
-                AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);
-                isCheckScheduled = false;
+                cancelScheduledSwitch("state=" + state);
                 log("cancel state=" + state);
             }
         } else if (id == NotificationCenter.proxyConnectionStageChanged && account == UserConfig.selectedAccount) {
@@ -154,7 +99,7 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
             if (state != ConnectionsManager.ConnectionStateConnectingToProxy) {
                 return;
             }
-            if (isCheckScheduled) {
+            if (engine.hasScheduledAttempt()) {
                 log("schedule_after_stage skipped already_scheduled phase=" + ProxyCheckDiagnostics.normalize(diagnostic));
                 return;
             }
@@ -164,10 +109,49 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
     }
 
     private void scheduleSwitch(long delayMs, String reason) {
-        AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);
-        isCheckScheduled = true;
-        AndroidUtilities.runOnUIThread(checkProxyAndSwitchRunnable, delayMs);
-        log("scheduled_switch reason=" + reason + " delay_ms=" + delayMs);
+        if (scheduledSwitchRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(scheduledSwitchRunnable);
+            scheduledSwitchRunnable = null;
+        }
+        ProxyRotationEngine.Attempt attempt = engine.beginScheduledAttempt(SharedConfig.currentProxy, delayMs, reason);
+        final Runnable[] runnableHolder = new Runnable[1];
+        runnableHolder[0] = () -> runScheduledSwitch(attempt, runnableHolder[0]);
+        scheduledSwitchRunnable = runnableHolder[0];
+        AndroidUtilities.runOnUIThread(scheduledSwitchRunnable, delayMs);
+        log("scheduled_switch reason=" + reason + " delay_ms=" + delayMs + " generation=" + attempt.generation);
+    }
+
+    private void runScheduledSwitch(ProxyRotationEngine.Attempt attempt, Runnable runnable) {
+        if (scheduledSwitchRunnable == runnable) {
+            scheduledSwitchRunnable = null;
+        }
+        log("scheduled_check skipped background_disabled reason=" + attempt.reason);
+        ProxyRotationEngine.SwitchDecision decision = engine.completeScheduledAttempt(attempt, SharedConfig.currentProxy);
+        if (decision.stale) {
+            log("scheduled_check stale reason=" + decision.decision);
+            return;
+        }
+        if (decision.proxyInfo == null) {
+            log(decision.decision + " wait_ms=" + decision.waitMs);
+            return;
+        }
+        switchToProxy(decision.proxyInfo, decision.decision);
+    }
+
+    private void cancelScheduledSwitch(String reason) {
+        if (scheduledSwitchRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(scheduledSwitchRunnable);
+            scheduledSwitchRunnable = null;
+        }
+        engine.cancelScheduledAttempt(reason);
+    }
+
+    private long rotationTimeoutMillis() {
+        int timeoutIndex = SharedConfig.proxyRotationTimeout;
+        if (timeoutIndex < 0 || timeoutIndex >= ROTATION_TIMEOUTS.size()) {
+            timeoutIndex = DEFAULT_TIMEOUT_INDEX;
+        }
+        return ROTATION_TIMEOUTS.get(timeoutIndex) * 1000L;
     }
 
     private void log(String message) {
