@@ -241,6 +241,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
     }
 
     public void setForumTopic(TLRPC.TL_forumTopic topic, long dialog_id, MessageObject messageObject, boolean showTopicIconInName, boolean animated) {
+        customDialog = null;
         forumTopic = topic;
         isTopic = forumTopic != null;
         if (currentDialogId != dialog_id) {
@@ -690,6 +691,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
     }
 
     public void setDialog(TLRPC.Dialog dialog, int type, int folder) {
+        customDialog = null;
         if (currentDialogId != dialog.id) {
             if (statusDrawableAnimator != null) {
                 statusDrawableAnimator.removeAllListeners();
@@ -732,6 +734,24 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
 
     public void setDialog(CustomDialog dialog) {
         customDialog = dialog;
+        currentDialogId = 0;
+        currentDialogFolderId = 0;
+        currentEditDate = 0;
+        message = null;
+        groupMessages = null;
+        user = null;
+        chat = null;
+        encryptedChat = null;
+        forumTopic = null;
+        isTopic = false;
+        isForum = false;
+        unreadCount = dialog != null ? dialog.unread_count : 0;
+        markUnread = false;
+        mentionCount = 0;
+        reactionMentionCount = 0;
+        pollVotesMentionCount = 0;
+        topicMuted = false;
+        drawUnmute = false;
         messageId = 0;
         update(0);
         checkOnline();
@@ -790,6 +810,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
     }
 
     public void setDialog(long dialog_id, MessageObject messageObject, int date, boolean useMe, boolean animated) {
+        customDialog = null;
         if (currentDialogId != dialog_id) {
             lastStatusDrawableParams = -1;
         }
@@ -814,6 +835,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
     }
 
     public void setDialog(long dialog_id, MessageObject messageObject, ArrayList<MessageObject> groupMessageObject, int date, boolean useMe, boolean animated) {
+        customDialog = null;
         if (currentDialogId != dialog_id) {
             lastStatusDrawableParams = -1;
         }

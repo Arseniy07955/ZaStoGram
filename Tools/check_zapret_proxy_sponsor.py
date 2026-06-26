@@ -9,6 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DIALOGS_ADAPTER = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Adapters/DialogsAdapter.java"
 DIALOGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/DialogsActivity.java"
+DIALOG_CELL = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Cells/DialogCell.java"
 SETTINGS_ACTIVITY = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java"
 SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
@@ -44,6 +45,7 @@ EXPECTED_LINKS = {
 def main() -> int:
     dialogs_adapter = DIALOGS_ADAPTER.read_text(encoding="utf-8")
     dialogs_activity = DIALOGS_ACTIVITY.read_text(encoding="utf-8")
+    dialog_cell = DIALOG_CELL.read_text(encoding="utf-8")
     settings_activity = SETTINGS_ACTIVITY.read_text(encoding="utf-8")
     shared_config = SHARED_CONFIG.read_text(encoding="utf-8")
     strings = STRINGS.read_text(encoding="utf-8")
@@ -93,6 +95,21 @@ def main() -> int:
         "isZapretVpnSponsor(position)" in dialogs_activity
         and 'Browser.openUrl(getContext(), "https://t.me/zapretvpns_bot")' in dialogs_activity,
         "DialogsActivity must open the sponsor bot from the synthetic chat row",
+    )
+    custom_dialog_start = dialog_cell.find("public void setDialog(CustomDialog dialog)")
+    custom_dialog_end = dialog_cell.find("private void checkOnline()", custom_dialog_start)
+    custom_dialog_body = dialog_cell[custom_dialog_start:custom_dialog_end]
+    require(
+        "currentDialogId = 0;" in custom_dialog_body
+        and "message = null;" in custom_dialog_body
+        and "user = null;" in custom_dialog_body
+        and "chat = null;" in custom_dialog_body
+        and "encryptedChat = null;" in custom_dialog_body,
+        "DialogCell custom rows must clear recycled real-dialog state",
+    )
+    require(
+        dialog_cell.count("customDialog = null;") >= 4,
+        "DialogCell real chat/topic setters must clear recycled custom-dialog state",
     )
 
     require(

@@ -324,6 +324,7 @@ public class SharedConfig {
     public static int ivFontSize = 16;
     public static boolean proxyRotationEnabled;
     public static int proxyRotationTimeout;
+    public static boolean showZapretVpnSponsor = true;
     public static boolean mtProxyClientHelloFragmentation;
     public static boolean mtProxySoftMux = true;
     public static int mtProxyConnectionPatternMode;
@@ -545,6 +546,7 @@ public class SharedConfig {
                 editor.putBoolean("proxyRotationEnabled", proxyRotationEnabled);
                 proxyRotationTimeout = clampProxyRotationTimeout(proxyRotationTimeout);
                 editor.putInt("proxyRotationTimeout", proxyRotationTimeout);
+                editor.putBoolean("showZapretVpnSponsor", showZapretVpnSponsor);
                 editor.putBoolean("mtProxyClientHelloFragmentation", mtProxyClientHelloFragmentation);
                 editor.putBoolean("mtProxySoftMux", mtProxySoftMux);
                 editor.putInt("mtProxyConnectionPatternMode", mtProxyConnectionPatternMode);
@@ -624,6 +626,7 @@ public class SharedConfig {
             storageCacheDir = preferences.getString("storageCacheDir", null);
             proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
+            showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
             mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
             if (preferences.contains("mtProxyConnectionPatternMode")) {

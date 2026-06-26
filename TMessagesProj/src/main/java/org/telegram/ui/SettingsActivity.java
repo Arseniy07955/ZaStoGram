@@ -744,6 +744,17 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(24, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.OurChannel)));
         items.add(SettingCell.Factory.of(25, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.OurVpn)));
         items.add(SettingCell.Factory.of(26, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_gift, getString(R.string.DonateAndSupport)));
+        items.add(UItem.asShadow(null));
+        items.add(UItem.asHeader(getString(R.string.FreeProxyChannels)));
+        items.add(SettingCell.Factory.of(27, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.ZapretVpnSponsorSetting), null, getString(SharedConfig.showZapretVpnSponsor ? R.string.ZapretProxySponsorOn : R.string.ZapretProxySponsorOff)));
+        items.add(SettingCell.Factory.of(28, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMtProxyEveryday)));
+        items.add(SettingCell.Factory.of(29, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyMtProto)));
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeRu)));
+        items.add(SettingCell.Factory.of(31, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTgMtProxyLol)));
+        items.add(SettingCell.Factory.of(32, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMemtproxy)));
+        items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTProxyRu)));
+        items.add(SettingCell.Factory.of(34, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeMTProto)));
+        items.add(SettingCell.Factory.of(35, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTelMTProto)));
 
         if (BuildVars.LOGS_ENABLED || BuildVars.DEBUG_PRIVATE_VERSION) {
             items.add(UItem.asShadow(null));
@@ -873,6 +884,35 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 26:
                 Browser.openUrl(getParentActivity(), "https://t.me/zapretvpns_bot");
+                break;
+            case 27:
+                SharedConfig.showZapretVpnSponsor = !SharedConfig.showZapretVpnSponsor;
+                SharedConfig.saveConfig();
+                listView.adapter.update(true);
+                break;
+            case 28:
+                Browser.openUrl(getParentActivity(), "https://t.me/MTProxy_everyday");
+                break;
+            case 29:
+                Browser.openUrl(getParentActivity(), "https://t.me/ProxyMTProto");
+                break;
+            case 30:
+                Browser.openUrl(getParentActivity(), "https://t.me/ProxyFree_Ru");
+                break;
+            case 31:
+                Browser.openUrl(getParentActivity(), "https://t.me/tgmtproxylol");
+                break;
+            case 32:
+                Browser.openUrl(getParentActivity(), "https://t.me/memtproxy");
+                break;
+            case 33:
+                Browser.openUrl(getParentActivity(), "https://t.me/TProxyRU");
+                break;
+            case 34:
+                Browser.openUrl(getParentActivity(), "https://t.me/ProxyFreeMTProto");
+                break;
+            case 35:
+                Browser.openUrl(getParentActivity(), "https://t.me/TelMTProto");
                 break;
 
             case 20:
