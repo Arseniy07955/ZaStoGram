@@ -338,6 +338,20 @@ def main():
         "MtProxyEndpointPolicy::networkEndpointKeyFor" in socket and "networkEndpointKeyFor" in endpoint_policy,
         "pre-TLS endpoint resilience must have a host/port-scoped network key separate from secret/SNI recipe state",
     )
+    require(
+        "MtProxyEndpointPolicy::admissionKeyFor" in socket
+        and "admissionKeyFor" in endpoint_policy
+        and "currentMtProxyAdmissionKey" in socket,
+        "FakeTLS admission scheduler identity must be a canonical proxy endpoint/SNI key, not rebuilt from mutable Telegram DC fields",
+    )
+    admission_start = socket.find("bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded")
+    admission_end = socket.find("void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer", admission_start)
+    admission_body = socket[admission_start:admission_end]
+    require(
+        "proxyHandshakeAdmissionKey = currentMtProxyAdmissionKey;" in admission_body
+        and "currentAddress + \":\" + std::to_string((unsigned int) currentPort)" not in admission_body,
+        "admission scheduling must take its lease key from currentMtProxyAdmissionKey only",
+    )
     dns_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::dnsCacheKeyFor")
     dns_key_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::stateKeyForPhase", dns_key_start)
     dns_key_body = endpoint_policy[dns_key_start:dns_key_end]
@@ -346,7 +360,7 @@ def main():
         "DNS cache key must lowercase host names so equivalent domains share one last-good-IP entry",
     )
     network_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::networkEndpointKeyFor")
-    network_key_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::endpointKeyFor", network_key_start)
+    network_key_end = endpoint_policy.find("std::string MtProxyEndpointPolicy::admissionKeyFor", network_key_start)
     network_key_body = endpoint_policy[network_key_start:network_key_end]
     require(
         network_key_start != -1

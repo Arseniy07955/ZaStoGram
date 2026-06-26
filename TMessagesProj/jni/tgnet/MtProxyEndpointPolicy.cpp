@@ -195,6 +195,15 @@ std::string MtProxyEndpointPolicy::networkEndpointKeyFor(const std::string &host
     return hostKey + ":" + std::to_string((unsigned int) port);
 }
 
+std::string MtProxyEndpointPolicy::admissionKeyFor(const std::string &host, uint16_t port, const std::string &domain) {
+    std::string key = networkEndpointKeyFor(host, port);
+    if (!domain.empty()) {
+        key += ":";
+        key += domain;
+    }
+    return key;
+}
+
 std::string MtProxyEndpointPolicy::endpointKeyFor(const std::string &host, uint16_t port, const char *secretKind, const std::string &domain) {
     std::string key = host + ":" + std::to_string((unsigned int) port);
     key += ":";

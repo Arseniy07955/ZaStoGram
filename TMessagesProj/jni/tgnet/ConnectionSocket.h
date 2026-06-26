@@ -118,6 +118,8 @@ private:
     void setMtProxyTcpConnectAttemptStarted(bool started, const char *reason);
     void setMtProxyDnsResolveAttemptStarted(bool started, const char *reason);
     void setMtProxyPreTcpWaitPhase(const char *phase, int64_t deadlineMs, const char *reason);
+    void finishMtProxyPreTcpWait(const char *reason);
+    bool canRunMtProxyPreTcpTimer(int32_t expectedMode, uint32_t timerGeneration);
     void classifyMtProxyPreTcpTimeoutDiagnostic(const char *reason);
     std::string deriveMtProxyTerminalDiagnostic(int32_t reason, int32_t error);
     bool mtProxyDiagnosticIsLocalSchedulerTimeout(const char *diagnostic);

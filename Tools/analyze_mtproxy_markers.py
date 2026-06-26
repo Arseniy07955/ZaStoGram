@@ -70,6 +70,7 @@ FAKETLS_FAILURE_VERDICTS = {
     "host_resolve_failed",
     "host_resolve_timeout",
     "tcp_connect_gate_timeout",
+    "tcp_budget_stolen_by_pre_tcp_wait",
     "tcp_not_connected",
     "tcp_connected_no_pong",
     "client_hello_sent_no_server_hello",
@@ -144,6 +145,42 @@ class Attempt:
         if end < start:
             return ""
         return str(round((end - start) * 1000))
+
+    def timing_ms_int(self, start_event: str, end_event: str) -> int | None:
+        value = self.timing_ms(start_event, end_event)
+        if not value:
+            return None
+        return int(value)
+
+    def has_pre_tcp_wait_before_socket_connect(self) -> bool:
+        pre_tcp_events = (
+            "admission_queue",
+            "admission_queue_wait",
+            "admission_grant_queued",
+            "endpoint_cooldown",
+            "dns_coalesce_wait",
+            "tcp_connect_gate",
+            "tcp_connect_gate_wait",
+            "host_resolve_start",
+        )
+        socket_start = self.event_times.get("socket_connect_start")
+        if socket_start is None:
+            return False
+        for event in pre_tcp_events:
+            event_time = self.event_times.get(event)
+            if event_time is not None and event_time <= socket_start:
+                return True
+        return False
+
+    def has_stolen_tcp_budget(self) -> bool:
+        tcp_close_ms = self.timing_ms_int("socket_connect_start", "mtproxy_disconnect")
+        return (
+            tcp_close_ms is not None
+            and tcp_close_ms < 250
+            and self.disconnect_reason == "2"
+            and self.disconnect_error == "0"
+            and self.has_pre_tcp_wait_before_socket_connect()
+        )
 
     def add(self, line_no: int, text: str) -> None:
         if not self.first_line:
@@ -227,6 +264,8 @@ class Attempt:
         if disconnect:
             self.disconnect_reason = disconnect.group(1)
             self.disconnect_error = disconnect.group(2)
+            self.events["mtproxy_disconnect"] += 1
+            self.event_times.setdefault("mtproxy_disconnect", log_time_seconds(text))
             self.disconnect = (
                 f"reason={disconnect.group(1)} error={disconnect.group(2)} "
                 f"proxy_state={disconnect.group(3)} tls_state={disconnect.group(4)} "
@@ -278,7 +317,10 @@ class Attempt:
             "endpoint_data_path_success_rejected": "endpoint_data_path_success_rejected",
             "endpoint_success": "endpoint_success",
             "pre_tcp_timeout_diagnostic": "pre_tcp_timeout_diagnostic",
+            "pre_tcp_wait_finished": "pre_tcp_wait_finished",
+            "pre_tcp_timer_ignored": "pre_tcp_timer_ignored",
             "transport_invariant": "transport_invariant",
+            "tcp_connect_timeout": "tcp_connect_timeout",
             "server_hello_hmac_ok": "server_hello_hmac_ok",
             "server_hello_hmac_mismatch": "server_hello_hmac_mismatch",
             "server_hello_hmac_timeout": "server_hello_hmac_timeout",
@@ -371,6 +413,8 @@ class Attempt:
                 return "admission_timeout"
             return "connection_not_started"
         if not has("socket_connected"):
+            if self.has_stolen_tcp_budget():
+                return "tcp_budget_stolen_by_pre_tcp_wait"
             return "tcp_not_connected"
         if has("tcp_connected_no_pong"):
             return "tcp_connected_no_pong"
@@ -418,6 +462,8 @@ class Attempt:
             parts.append(f"pattern={self.connection_pattern}")
         if (hmac_ms := self.timing_ms("client_hello_sent", "server_hello_hmac_ok")):
             parts.append(f"hmac_ms={hmac_ms}")
+        if (tcp_close_ms := self.timing_ms("socket_connect_start", "mtproxy_disconnect")):
+            parts.append(f"tcp_close_ms={tcp_close_ms}")
         if self.disconnect_reason:
             parts.append(f"close={self.disconnect_reason}/{self.disconnect_error}")
         return " ".join(parts)
@@ -1240,6 +1286,7 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                 "connection_type",
                 "priority",
                 "tcp_ms",
+                "tcp_close_ms",
                 "hmac_ms",
                 "app_recv_ms",
                 "tls_frames_completed",
@@ -1267,6 +1314,7 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                     "connection_type": attempt.connection_type,
                     "priority": attempt.priority,
                     "tcp_ms": attempt.timing_ms("socket_connect_start", "socket_connected"),
+                    "tcp_close_ms": attempt.timing_ms("socket_connect_start", "mtproxy_disconnect"),
                     "hmac_ms": attempt.timing_ms("client_hello_sent", "server_hello_hmac_ok"),
                     "app_recv_ms": attempt.timing_ms("first_tls_app_sent", "first_tls_app_recv"),
                     "tls_frames_completed": attempt.completed_tls_frames(),

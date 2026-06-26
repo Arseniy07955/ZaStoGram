@@ -189,8 +189,11 @@ public:
         std::string currentMtProxyEndpointKey;
         std::string currentMtProxyNetworkEndpointKey;
         std::string currentMtProxyDnsCacheKey;
+        std::string currentMtProxyAdmissionKey;
         std::string proxyCheckDiagnostic = "connection_not_started";
         bool tcpConnectAttemptStarted = false;
+        int64_t tcpConnectStartTimeMs = 0;
+        int64_t tcpConnectDeadlineMs = 0;
         bool dnsResolveAttemptStarted = false;
         std::string preTcpWaitPhase;
         int64_t preTcpWaitDeadlineMs = 0;

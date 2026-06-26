@@ -83,6 +83,17 @@ def main() -> int:
         "DialogsAdapter must gate the sponsor row to the default chat list",
     )
     require(
+        "filterLegacyProxySponsorDialogs(" in dialogs_adapter
+        and "messagesController.promoDialogType == MessagesController.PROMO_TYPE_PROXY" in dialogs_adapter,
+        "DialogsAdapter must remove the legacy Telegram proxy promo dialog",
+    )
+    require(
+        "insertZapretVpnSponsorItem()" in dialogs_adapter
+        and "isArchiveDialog(item.dialog)" in dialogs_adapter
+        and "insertIndex = i + 1" in dialogs_adapter,
+        "DialogsAdapter must insert the sponsor below the archive row when archive exists",
+    )
+    require(
         "SharedConfig.showZapretVpnSponsor" in dialogs_adapter,
         "DialogsAdapter must honor the hide setting",
     )

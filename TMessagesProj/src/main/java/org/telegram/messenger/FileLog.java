@@ -594,27 +594,41 @@ public class FileLog {
     }
 
     public static void cleanupLogs() {
-        ensureInitied();
-        File dir = AndroidUtilities.getLogsDir();
-        if (dir == null) {
+        if (!BuildVars.LOGS_ENABLED) {
             return;
         }
-        File[] files = dir.listFiles();
-        if (files != null) {
-            for (int a = 0; a < files.length; a++) {
-                File file = files[a];
-                if (getInstance().currentFile != null && file.getAbsolutePath().equals(getInstance().currentFile.getAbsolutePath())) {
-                    continue;
-                }
-                if (getInstance().networkFile != null && file.getAbsolutePath().equals(getInstance().networkFile.getAbsolutePath())) {
-                    continue;
-                }
-                if (getInstance().tonlibFile != null && file.getAbsolutePath().equals(getInstance().tonlibFile.getAbsolutePath())) {
-                    continue;
-                }
-                file.delete();
+        try {
+            File dir = AndroidUtilities.getLogsDir();
+            if (dir == null) {
+                return;
             }
+            FileLog instance = Instance;
+            File current = instance != null ? instance.currentFile : null;
+            File mtproto = instance != null ? instance.tlRequestsFile : null;
+            File network = instance != null ? instance.networkFile : null;
+            File tonlib = instance != null ? instance.tonlibFile : null;
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (int a = 0; a < files.length; a++) {
+                    File file = files[a];
+                    if (!file.isFile()) {
+                        continue;
+                    }
+                    if (isSameLogFile(file, current) || isSameLogFile(file, mtproto) || isSameLogFile(file, network) || isSameLogFile(file, tonlib)) {
+                        continue;
+                    }
+                    if (!file.delete()) {
+                        Log.w(tag, "failed to delete log file " + file.getAbsolutePath());
+                    }
+                }
+            }
+        } catch (Throwable e) {
+            Log.w(tag, "failed to cleanup log files", e);
         }
+    }
+
+    private static boolean isSameLogFile(File file, File protectedFile) {
+        return protectedFile != null && file.getAbsolutePath().equals(protectedFile.getAbsolutePath());
     }
 
     public static class IgnoreSentException extends Exception{

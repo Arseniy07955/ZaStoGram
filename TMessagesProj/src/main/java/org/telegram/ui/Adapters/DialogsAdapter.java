@@ -230,6 +230,47 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 itemInternals.get(position).viewType == VIEW_TYPE_ZAPRET_VPN_SPONSOR;
     }
 
+    private ArrayList<TLRPC.Dialog> filterLegacyProxySponsorDialogs(ArrayList<TLRPC.Dialog> dialogs, MessagesController messagesController) {
+        ArrayList<TLRPC.Dialog> filteredDialogs = null;
+        for (int i = 0; i < dialogs.size(); i++) {
+            TLRPC.Dialog dialog = dialogs.get(i);
+            if (dialog != null &&
+                    messagesController.promoDialogType == MessagesController.PROMO_TYPE_PROXY &&
+                    messagesController.isPromoDialog(dialog.id, true)) {
+                if (filteredDialogs == null) {
+                    filteredDialogs = new ArrayList<>(dialogs.subList(0, i));
+                }
+                continue;
+            }
+            if (filteredDialogs != null) {
+                filteredDialogs.add(dialog);
+            }
+        }
+        return filteredDialogs != null ? filteredDialogs : dialogs;
+    }
+
+    private boolean isArchiveDialog(TLRPC.Dialog dialog) {
+        return dialog instanceof TLRPC.TL_dialogFolder || dialog != null && DialogObject.isFolderDialogId(dialog.id);
+    }
+
+    private void insertZapretVpnSponsorItem() {
+        if (!shouldShowZapretVpnSponsor()) {
+            return;
+        }
+        int insertIndex = 0;
+        for (int i = 0; i < itemInternals.size(); i++) {
+            ItemInternal item = itemInternals.get(i);
+            if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null) {
+                insertIndex = i;
+                if (isArchiveDialog(item.dialog)) {
+                    insertIndex = i + 1;
+                }
+                break;
+            }
+        }
+        itemInternals.add(insertIndex, new ItemInternal(VIEW_TYPE_ZAPRET_VPN_SPONSOR));
+    }
+
     public int getDialogsCount() {
         return dialogsCount;
     }
@@ -1502,6 +1543,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         if (array == null) {
             array = new ArrayList<>();
         }
+        array = filterLegacyProxySponsorDialogs(array, messagesController);
         dialogsCount = array.size();
         isEmpty = false;
         if (dialogsCount == 0 && parentFragment.isArchive()) {
@@ -1580,10 +1622,6 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             itemInternals.add(new ItemInternal(VIEW_TYPE_REQUIREMENTS));
         }
 
-        if (shouldShowZapretVpnSponsor()) {
-            itemInternals.add(new ItemInternal(VIEW_TYPE_ZAPRET_VPN_SPONSOR));
-        }
-
         if (collapsedView || isTransitionSupport) {
             for (int k = 0; k < array.size(); k++) {
                 if (dialogsType == 2 && array.get(k) instanceof DialogsActivity.DialogsHeader) {
@@ -1592,6 +1630,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                     itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG, array.get(k)));
                 }
             }
+            insertZapretVpnSponsorItem();
             itemInternals.add(new ItemInternal(VIEW_TYPE_LAST_EMPTY));
             return;
         }
@@ -1679,6 +1718,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 itemInternals.add(new ItemInternal(VIEW_TYPE_LAST_EMPTY));
             }
         }
+
+        insertZapretVpnSponsorItem();
 
         if (!messagesController.hiddenUndoChats.isEmpty()) {
             for (int i = 0; i < itemInternals.size(); ++i) {

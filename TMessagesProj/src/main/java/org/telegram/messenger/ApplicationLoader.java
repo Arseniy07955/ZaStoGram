@@ -290,6 +290,7 @@ public class ApplicationLoader extends Application {
         super.onCreate();
 
         if (BuildVars.LOGS_ENABLED) {
+            FileLog.cleanupLogs();
             FileLog.d("app start time = " + (startTime = SystemClock.elapsedRealtime()));
             try {
                 final PackageInfo info = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);

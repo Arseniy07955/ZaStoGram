@@ -55,6 +55,7 @@ public:
 
     static bool extractSslipIpv4Address(const std::string &host, struct in_addr *address, std::string *literalAddress);
     static std::string networkEndpointKeyFor(const std::string &host, uint16_t port);
+    static std::string admissionKeyFor(const std::string &host, uint16_t port, const std::string &domain);
     static std::string endpointKeyFor(const std::string &host, uint16_t port, const char *secretKind, const std::string &domain);
     static std::string dnsCacheKeyFor(const std::string &host, uint16_t port);
     static std::string stateKeyForPhase(const std::string &phase, const std::string &networkEndpointKey, const std::string &endpointKey);

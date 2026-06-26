@@ -388,6 +388,26 @@ def main():
         "socket_connect_start without socket_connected must remain tcp_not_connected",
     )
 
+    stolen_tcp_budget = Attempt(key="stolen-tcp-budget")
+    stolen_tcp_budget.add(
+        1,
+        "06-20 15:00:00.000 connection(0x24) mtproxy_startup connect_start proxy_state=10 "
+        "secret_kind=ee is_faketls=1 domain_len=17 profile=firefox_android "
+        "connection_pattern=browser address=198.51.100.24 port=443",
+    )
+    stolen_tcp_budget.add(2, "06-20 15:00:00.010 connection(0x24) mtproxy_startup admission_queue admission_mode=browser connection_pattern=browser key=198.51.100.24:443:cdn.example priority=0 active=1 queued=1 retry=650")
+    stolen_tcp_budget.add(3, "06-20 15:00:12.000 connection(0x24) mtproxy_startup socket_connect_start ipv6=0 state=10")
+    stolen_tcp_budget.add(4, "06-20 15:00:12.008 connection(0x24) mtproxy_disconnect reason=2 reason_text=timeout_waiting_connect_or_pending_requests error=0 error_text=none secret_kind=ee is_faketls=1 is_wss=0 transport_state=epoll_registered epoll_registered=1 admission_active=1 admission_queued=0 tcp_gate_active=1 waiting_resolve=0 proxy_state=10 tls_state=0 bytes_read=0 pending_hello=0/0 pending=0/0 first_tls_sent=0 first_tls_recv=0 first_plain_sent=0 first_plain_recv=0 tls_frames_completed=0")
+    stolen_tcp_budget.add(5, "06-20 15:00:12.009 connection(0x24) mtproxy_startup close_diagnostic phase=tcp_not_connected")
+    require(
+        stolen_tcp_budget.verdict() == "tcp_budget_stolen_by_pre_tcp_wait",
+        "timeout close less than 250ms after socket_connect_start following pre-TCP wait must be classified as stolen TCP budget, not real tcp_not_connected",
+    )
+    require(
+        stolen_tcp_budget.timing_ms("socket_connect_start", "mtproxy_disconnect") == "8",
+        "analyzer must expose socket_connect_start -> disconnect timing for stolen TCP budget diagnosis",
+    )
+
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         marker_path = Path(handle.name)
         handle.write("logcat.txt:1: connection(0x1) mtproxy_startup socket_connect_start ipv6=0 state=0\n")

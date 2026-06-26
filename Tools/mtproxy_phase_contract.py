@@ -59,6 +59,7 @@ PHASES = (
     MtProxyPhase("endpoint_cooldown_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, endpoint_key=ENDPOINT_EXACT),
     MtProxyPhase("dns_coalesce_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, endpoint_key=ENDPOINT_NETWORK),
     MtProxyPhase("pre_tcp_gate_admission_overlap", PHASE_FAILURE, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
+    MtProxyPhase("tcp_budget_stolen_by_pre_tcp_wait", PHASE_FAILURE, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
     MtProxyPhase("host_resolve_failed", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("host_resolve_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("tcp_connect_gate_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, endpoint_key=ENDPOINT_NETWORK),
