@@ -12,14 +12,9 @@ import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.lerp;
 import static org.telegram.messenger.LocaleController.getString;
 
-import android.Manifest;
-import android.annotation.TargetApi;
-import android.app.Activity;
-import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
@@ -30,8 +25,6 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.SystemClock;
-import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -57,7 +50,6 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.ContactsController;
@@ -171,9 +163,6 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
     private HeaderShadowView headerShadowView;
     private FragmentSearchField searchField;
 
-    private AlertDialog permissionDialog;
-    private boolean askAboutContacts = true;
-
     private boolean disableSections;
 
     private final LongSparseArray<TLRPC.User> selectedContacts = new LongSparseArray<>();
@@ -186,9 +175,6 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
     private BackDrawable backDrawable;
 
     private String searchQuery;
-
-    private boolean checkPermission = true;
-    private long permissionRequestTime;
 
     private final static int search_button = 0;
     private final static int sort_button = 1;
@@ -222,7 +208,6 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.updateInterfaces);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.encryptedChatCreated);
         NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.closeChats);
-        checkPermission = UserConfig.getInstance(currentAccount).syncContacts;
         if (arguments != null) {
             onlyUsers = arguments.getBoolean("onlyUsers", false);
             destroyAfterSelect = arguments.getBoolean("destroyAfterSelect", false);
@@ -1240,107 +1225,8 @@ public class ContactsActivity extends BaseFragment implements FactorAnimator.Tar
         }
     }
 
-    @Override
-    public void onBecomeFullyVisible() {
-        super.onBecomeFullyVisible();
-        if (checkPermission && Build.VERSION.SDK_INT >= 23) {
-            Activity activity = getParentActivity();
-            if (activity != null) {
-                checkPermission = false;
-                if (activity.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED/* ||
-                    activity.checkSelfPermission(Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED*/) {
-                    if (activity.shouldShowRequestPermissionRationale(Manifest.permission.READ_CONTACTS)/* ||
-                        activity.shouldShowRequestPermissionRationale(Manifest.permission.WRITE_CONTACTS)*/) {
-                        AlertDialog.Builder builder = AlertsCreator.createContactsPermissionDialog(activity, param -> {
-                            askAboutContacts = param != 0;
-                            if (param == 0) {
-                                return;
-                            }
-                            askForPermissons(false);
-                        });
-                        showDialog(permissionDialog = builder.create());
-                    } else {
-                        askForPermissons(true);
-                    }
-                }
-            }
-        }
-    }
-
     protected RecyclerListView getListView() {
         return listView;
-    }
-
-    @Override
-    protected void onDialogDismiss(Dialog dialog) {
-        super.onDialogDismiss(dialog);
-        if (permissionDialog != null && dialog == permissionDialog && getParentActivity() != null && askAboutContacts) {
-            askForPermissons(false);
-        }
-    }
-
-    @TargetApi(Build.VERSION_CODES.M)
-    private void askForPermissons(boolean alert) {
-        Activity activity = getParentActivity();
-        if (activity == null || !UserConfig.getInstance(currentAccount).syncContacts || activity.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED/* && activity.checkSelfPermission(Manifest.permission.WRITE_CONTACTS) == PackageManager.PERMISSION_GRANTED*/) {
-            return;
-        }
-        if (alert && askAboutContacts) {
-            AlertDialog.Builder builder = AlertsCreator.createContactsPermissionDialog(activity, param -> {
-                MessagesController.getGlobalNotificationsSettings().edit().putBoolean("askAboutContacts2", false).commit();
-                NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.contactsPermissionBadgeCheck);
-                askAboutContacts = param != 0;
-                if (param == 0) {
-                    return;
-                }
-                askForPermissons(false);
-            });
-            showDialog(builder.create());
-            return;
-        }
-        permissionRequestTime = SystemClock.elapsedRealtime();
-        ArrayList<String> permissons = new ArrayList<>();
-        permissons.add(Manifest.permission.READ_CONTACTS);
-        permissons.add(Manifest.permission.WRITE_CONTACTS);
-        permissons.add(Manifest.permission.GET_ACCOUNTS);
-        String[] items = permissons.toArray(new String[0]);
-        try {
-            activity.requestPermissions(items, 1);
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResultFragment(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == 1) {
-            for (int a = 0; a < permissions.length; a++) {
-                if (grantResults.length <= a) {
-                    continue;
-                }
-                if (Manifest.permission.READ_CONTACTS.equals(permissions[a])) {
-                    if (grantResults[a] == PackageManager.PERMISSION_GRANTED) {
-                        ContactsController.getInstance(currentAccount).forceImportContacts();
-                    } else {
-                        MessagesController.getGlobalNotificationsSettings().edit()
-                            .putBoolean("askAboutContacts", askAboutContacts = false)
-                            .putBoolean("askAboutContacts2", false)
-                            .apply();
-                        if (SystemClock.elapsedRealtime() - permissionRequestTime < 200) {
-                            try {
-                                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                                Uri uri = Uri.fromParts("package", ApplicationLoader.applicationContext.getPackageName(), null);
-                                intent.setData(uri);
-                                getParentActivity().startActivity(intent);
-                            } catch (Exception e) {
-                                FileLog.e(e);
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
     }
 
     @Override

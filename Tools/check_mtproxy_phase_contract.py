@@ -23,6 +23,7 @@ POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePo
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+STARTUP_TIMELINE = ROOT / "TMessagesProj/jni/tgnet/MtProxyStartupTimeline.cpp"
 CONNECTION = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 
@@ -57,11 +58,24 @@ def java_cases(source: str, constants: dict[str, str]) -> set[str]:
     }
 
 
-def native_diagnostics(socket: str, socket_h: str) -> set[str]:
-    phases = set(re.findall(r'publishProxyConnectionStage\("([a-z0-9_]+)"\)', socket))
-    phases |= set(re.findall(r'proxyCheckDiagnostic\s*=\s*"([a-z0-9_]+)"', socket))
+def native_diagnostics(socket: str, socket_h: str, startup_timeline: str) -> set[str]:
+    native_source = socket + "\n" + startup_timeline
+    phases = set(re.findall(r'publishProxyConnectionStage\("([a-z0-9_]+)"\)', native_source))
+    phases |= set(re.findall(r'proxyCheckDiagnostic\s*=\s*"([a-z0-9_]+)"', native_source))
+    phases |= set(re.findall(r'return "([a-z0-9_]+)"', startup_timeline))
     phases |= set(re.findall(r'proxyCheckDiagnostic\s*=\s*"([a-z0-9_]+)"', socket_h))
     phases.discard("wss_tls_handshake")
+    phases -= {
+        "none",
+        "unknown",
+        "admission",
+        "host_resolve_admission",
+        "endpoint_backoff",
+        "dns_coalesce",
+        "tcp_connect",
+        "pre_tcp_timeout",
+        "tcp_connect_timeout",
+    }
     return phases
 
 
@@ -86,6 +100,7 @@ def main() -> int:
     scheduler = text(SCHEDULER)
     socket = text(SOCKET)
     socket_h = text(SOCKET_H)
+    startup_timeline = text(STARTUP_TIMELINE)
     connection = text(CONNECTION)
     analyzer = text(ANALYZER)
 
@@ -115,7 +130,7 @@ def main() -> int:
         "ProxyPhasePolicy key scope must match contract network-key phases",
     )
     require(
-        native_diagnostics(socket, socket_h) == native_phase_names(),
+        native_diagnostics(socket, socket_h, startup_timeline) == native_phase_names(),
         "native MTProxy diagnostics must match contract native phases",
     )
     require(
