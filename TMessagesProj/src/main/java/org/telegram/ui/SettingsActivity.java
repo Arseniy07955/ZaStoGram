@@ -686,12 +686,27 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
             items.add(UItem.asShadow(null));
         }
 
+        // ZaStoGram — все кастомные настройки форка в одном отдельном разделе (отдельно от официальных).
+        items.add(UItem.asHeader("ZaStoGram"));
+        items.add(SettingCell.Factory.of(1001, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, "Приватность", "Удалённые, самоуничтожение, view-once, скриншоты, реклама"));
+        items.add(UItem.asShadow(null));
+        // ZaStoGram — бесплатные прокси-каналы вынесены в отдельный раздел наверху (рядом с приватностью).
+        items.add(UItem.asHeader(getString(R.string.FreeProxyChannels)));
+        items.add(SettingCell.Factory.of(27, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.ZapretVpnSponsorSetting), null, getString(SharedConfig.showZapretVpnSponsor ? R.string.ZapretProxySponsorOn : R.string.ZapretProxySponsorOff)));
+        items.add(SettingCell.Factory.of(28, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMtProxyEveryday)));
+        items.add(SettingCell.Factory.of(29, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyMtProto)));
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeRu)));
+        items.add(SettingCell.Factory.of(31, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTgMtProxyLol)));
+        items.add(SettingCell.Factory.of(32, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMemtproxy)));
+        items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTProxyRu)));
+        items.add(SettingCell.Factory.of(34, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeMTProto)));
+        items.add(SettingCell.Factory.of(35, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTelMTProto)));
+        items.add(UItem.asShadow(null));
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
         items.add(SettingCell.Factory.of(2, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_chat, getString(R.string.SettingsChat), getString(R.string.SettingsChatInfo)));
         items.add(SettingCell.Factory.of(3, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.SettingsPrivacySecurity), getString(R.string.SettingsPrivacySecurityInfo)));
         items.add(SettingCell.Factory.of(5, IconBackgroundColors.RED.top, IconBackgroundColors.RED.bottom, R.drawable.settings_sounds, getString(R.string.SettingsNotifications), getString(R.string.SettingsNotificationsInfo)));
         items.add(SettingCell.Factory.of(6, IconBackgroundColors.BLUE_DEEP.top, IconBackgroundColors.BLUE_DEEP.bottom, R.drawable.settings_data, getString(R.string.SettingsData), getString(R.string.SettingsDataInfo)));
-        items.add(SettingCell.Factory.of(1001, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, "ZaSto Приватность", "Удалённые, самоуничтожение, скриншоты, реклама"));
         items.add(SettingCell.Factory.of(7, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.settings_folders, getString(R.string.SettingsFolders), getString(R.string.SettingsFoldersInfo)));
         items.add(SettingCell.Factory.of(8, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_devices, getString(R.string.SettingsDevices), getString(R.string.SettingsDevicesInfo)));
         items.add(SettingCell.Factory.of(9, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_power, getString(R.string.SettingsPowerSaving), getString(R.string.SettingsPowerSavingInfo)));
@@ -745,16 +760,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(24, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.OurChannel)));
         items.add(SettingCell.Factory.of(25, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.OurVpn)));
         items.add(UItem.asShadow(null));
-        items.add(UItem.asHeader(getString(R.string.FreeProxyChannels)));
-        items.add(SettingCell.Factory.of(27, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.ZapretVpnSponsorSetting), null, getString(SharedConfig.showZapretVpnSponsor ? R.string.ZapretProxySponsorOn : R.string.ZapretProxySponsorOff)));
-        items.add(SettingCell.Factory.of(28, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMtProxyEveryday)));
-        items.add(SettingCell.Factory.of(29, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyMtProto)));
-        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeRu)));
-        items.add(SettingCell.Factory.of(31, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTgMtProxyLol)));
-        items.add(SettingCell.Factory.of(32, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyMemtproxy)));
-        items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTProxyRu)));
-        items.add(SettingCell.Factory.of(34, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyProxyFreeMTProto)));
-        items.add(SettingCell.Factory.of(35, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_channel, getString(R.string.FreeProxyTelMTProto)));
 
         if (BuildVars.LOGS_ENABLED || BuildVars.DEBUG_PRIVATE_VERSION) {
             items.add(UItem.asShadow(null));
