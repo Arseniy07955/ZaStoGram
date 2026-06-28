@@ -151,8 +151,10 @@ public class PluginsController {
 
     /** Rebuild {@link #plugins} from the files on disk + persisted enabled flags. */
     private void scanInstalled() {
-        Set<String> ids = prefs().getStringSet("ids", new HashSet<>());
+        Set<String> ids = new HashSet<>(prefs().getStringSet("ids", new HashSet<>()));
         List<PluginInfo> list = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        // 1) Indexed plugins (carry their persisted enabled flag).
         for (String id : ids) {
             File f = new File(pluginsDir(), id + ".plugin");
             if (!f.exists()) {
@@ -161,17 +163,47 @@ public class PluginsController {
             PluginInfo info = parseMetadata(f);
             if (info == null) {
                 info = new PluginInfo();
-                info.id = id;
             }
             info.id = id;
             info.filePath = f.getAbsolutePath();
             info.enabled = prefs().getBoolean("enabled_" + id, true);
             list.add(info);
+            seen.add(id);
+        }
+        // 2) Adopt any .plugin file on disk that the index lost (e.g. a partial backup/restore),
+        //    so the FILE is the source of truth and plugins survive even a wiped prefs index.
+        File[] files = pluginsDir().listFiles();
+        if (files != null) {
+            for (File f : files) {
+                String fn = f.getName();
+                if (fn.startsWith("_import_") && fn.endsWith(".tmp")) {
+                    //noinspection ResultOfMethodCallIgnored
+                    f.delete(); // sweep leftover staging files from an interrupted install (runs once at init)
+                    continue;
+                }
+                if (!fn.endsWith(".plugin")) {
+                    continue;
+                }
+                String id = fn.substring(0, fn.length() - ".plugin".length());
+                if (seen.contains(id)) {
+                    continue;
+                }
+                PluginInfo info = parseMetadata(f);
+                if (info == null) {
+                    continue;
+                }
+                info.id = id;
+                info.filePath = f.getAbsolutePath();
+                info.enabled = prefs().getBoolean("enabled_" + id, true);
+                list.add(info);
+                seen.add(id);
+            }
         }
         synchronized (plugins) {
             plugins.clear();
             plugins.addAll(list);
         }
+        persistIndex(); // re-sync the index to match what is actually on disk
     }
 
     private void persistIndex() {

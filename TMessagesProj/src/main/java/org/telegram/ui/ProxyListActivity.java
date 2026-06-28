@@ -1126,6 +1126,27 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
         if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
             ProxyCheckScheduler.markConnected(selectedProxy);
+            checkCurrentProxyPingIfNeeded(selectedProxy);
+        }
+    }
+
+    private void checkCurrentProxyPingIfNeeded(SharedConfig.ProxyInfo selectedProxy) {
+        if (selectedProxy == null || selectedProxy.checking || ProxyCheckScheduler.isFresh(selectedProxy)) {
+            return;
+        }
+        boolean started = ProxyCheckScheduler.enqueueNow(currentAccount, selectedProxy, this, new ProxyCheckScheduler.Callback() {
+            @Override
+            public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
+                updateCurrentProxyStatusCell();
+            }
+
+            @Override
+            public void onProxyCheckQueueFinished() {
+                updateCurrentProxyStatusCell();
+            }
+        });
+        if (started) {
+            updateCurrentProxyStatusCell();
         }
     }
 

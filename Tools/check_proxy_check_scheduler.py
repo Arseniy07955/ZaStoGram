@@ -158,6 +158,13 @@ if (
     print("Proxy check scheduler guard failed:")
     print(f" - {STORE.relative_to(ROOT)}: generic connected-state observations must preserve fresh terminal failure or usable success phases")
     sys.exit(1)
+status_mark_connected_start = status_text.find("static void markConnected")
+status_mark_connected_end = status_text.find("static void markConnectionStarting", status_mark_connected_start)
+status_mark_connected_body = status_text[status_mark_connected_start:status_mark_connected_end]
+if "availableCheckTime = now" in status_mark_connected_body:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {STATUS.relative_to(ROOT)}: generic connected-state observations must not stamp measured proxy-check freshness before a real ping result")
+    sys.exit(1)
 mark_starting_start = store_text.find("public static void markConnectionStarting")
 mark_starting_end = store_text.find("public static void markConnectionUsable", mark_starting_start)
 mark_starting_body = store_text[mark_starting_start:mark_starting_end]
@@ -231,6 +238,25 @@ proxy_list_text = PROXY_LIST.read_text(encoding="utf-8")
 if "ProxyCheckScheduler.enqueueStale(currentAccount, proxyList" in proxy_list_text:
     print("Proxy check scheduler guard failed:")
     print(f" - {PROXY_LIST.relative_to(ROOT)}: opening the proxy list must not start a full proxy-check sweep")
+    sys.exit(1)
+mark_connected_proxy_start = proxy_list_text.find("private void markConnectedCurrentProxyIfNeeded")
+mark_connected_proxy_end = proxy_list_text.find("@Override", mark_connected_proxy_start)
+mark_connected_proxy_body = proxy_list_text[mark_connected_proxy_start:mark_connected_proxy_end]
+if "checkCurrentProxyPingIfNeeded(selectedProxy);" not in mark_connected_proxy_body:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: connected current proxy must start a targeted ping check when measured ping freshness is missing")
+    sys.exit(1)
+current_ping_check_start = proxy_list_text.find("private void checkCurrentProxyPingIfNeeded")
+current_ping_check_end = proxy_list_text.find("private class ListAdapter", current_ping_check_start)
+current_ping_check_body = proxy_list_text[current_ping_check_start:current_ping_check_end]
+if (
+    current_ping_check_start == -1
+    or "ProxyCheckScheduler.isFresh(selectedProxy)" not in current_ping_check_body
+    or "ProxyCheckScheduler.enqueueNow(currentAccount, selectedProxy, this" not in current_ping_check_body
+    or "updateCurrentProxyStatusCell();" not in current_ping_check_body
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: current-proxy ping refresh must be a targeted scheduler check with UI refresh callbacks")
     sys.exit(1)
 did_update_start = proxy_list_text.find("id == NotificationCenter.didUpdateConnectionState")
 proxy_done_start = proxy_list_text.find("id == NotificationCenter.proxyCheckDone")

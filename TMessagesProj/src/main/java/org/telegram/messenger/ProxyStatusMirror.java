@@ -57,7 +57,6 @@ final class ProxyStatusMirror {
             return;
         }
         proxyInfo.available = true;
-        proxyInfo.availableCheckTime = now;
         proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK;
         proxyInfo.lastCheckDiagnosticTime = now;
     }
