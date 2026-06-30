@@ -376,4 +376,30 @@
     <string name="UseProxyWssInfo">Свой WSS — это не MTProxy и не SOCKS-прокси. Когда WSS включен, выбранный SOCKS5 может использоваться как upstream для WSS.</string>
     <string name="WssSocksUpstreamHeader">SOCKS5 upstream для WSS</string>
     <string name="WssSocksUpstreamInfo">Здесь показываются только SOCKS5. Выбранный SOCKS5 используется как upstream для WSS; MTProxy скрыты.</string>
+    <!-- ZaStoGram — экран логов -->
+    <string name="ZaLogsTitle">Логи</string>
+    <string name="ZaLogsFilesHeader">Файлы логов</string>
+    <string name="ZaLogsCurrent">текущая сессия</string>
+    <string name="ZaLogsEmpty">Логов пока нет</string>
+    <string name="ZaLogsSelectAll">Выбрать все</string>
+    <string name="ZaLogsSendSelected">Отправить выбранные</string>
+    <string name="ZaLogsSendAll">Отправить все</string>
+    <string name="ZaLogsDeleteSelected">Удалить выбранные</string>
+    <string name="ZaLogsDeleteAll">Удалить все</string>
+    <string name="ZaLogsNewFile">Начать новый файл лога</string>
+    <string name="ZaLogsNewFileDone">Начат новый файл лога</string>
+    <string name="ZaLogsEnable">Логирование включено</string>
+    <string name="ZaLogsEnableInfo">Когда включено, приложение пишет новый файл лога при каждом открытии, чтобы логи разных запусков не смешивались. Нажмите на файл, чтобы посмотреть его, или выберите файлы и отправьте.</string>
+    <string name="ZaLogsShare">Поделиться</string>
+    <string name="ZaLogsCopyAll">Копировать</string>
+    <string name="ZaLogsCopied">Скопировано в буфер обмена</string>
+    <string name="ZaLogsTruncated">Лог большой — показана только последняя часть.</string>
+    <string name="ZaLogsDeleteTitle">Удалить логи</string>
+    <string name="ZaLogsDeleteSelectedMsg">Удалить выбранные файлы логов?</string>
+    <string name="ZaLogsDeleteAllMsg">Удалить все файлы логов? Лог текущей сессии будет сохранён.</string>
+    <string name="ZaLogsSelectedCount">Выбрано: %1$d</string>
+    <string name="ZaLogsNothingSelected">Выберите хотя бы один файл</string>
+    <string name="ZaLogsFooter">Новый файл лога создаётся при каждом открытии приложения, чтобы разные сессии не путались. Старые файлы сверх лимита удаляются автоматически.</string>
+    <string name="ZaLogsKeep">Хранить последние файлы</string>
+    <string name="ZaLogsKeepUnlimited">Без ограничения</string>
 </resources>

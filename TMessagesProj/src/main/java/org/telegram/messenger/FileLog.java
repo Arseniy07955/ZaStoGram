@@ -41,6 +41,7 @@ import java.io.OutputStreamWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +56,7 @@ public class FileLog {
     private File networkFile = null;
     private File tonlibFile = null;
     private boolean initied;
+    private long lastLogRotation;
     public static boolean databaseIsMalformed = false;
 
     private OutputStreamWriter tlStreamWriter = null;
@@ -333,10 +335,152 @@ public class FileLog {
             new ANRDetector(this::dumpANR);
         }
         initied = true;
+        lastLogRotation = System.currentTimeMillis();
+        if (logQueue != null) {
+            logQueue.postRunnable(() -> pruneOldLogs(getMaxLogFiles()));
+        }
     }
 
     public static void ensureInitied() {
         getInstance().init();
+    }
+
+    // ZaStoGram — минимальный интервал между ротациями лога, чтобы быстрые
+    // переключения фон/передний план (диалоги разрешений, поворот экрана и т.п.)
+    // не плодили пустые файлы.
+    private final static long MIN_LOG_ROTATION_INTERVAL = 10_000;
+
+    /**
+     * ZaStoGram: начинает новый файл лога (и mtproto-лога), закрывая текущий.
+     * Вызывается при каждом выходе приложения на передний план, чтобы логи
+     * разных запусков не смешивались в одном файле. Защищено от дребезга.
+     */
+    public static void rotateLog() {
+        rotateLog(false);
+    }
+
+    public static void rotateLog(boolean force) {
+        if (!BuildVars.LOGS_ENABLED) {
+            return;
+        }
+        final FileLog instance = getInstance();
+        instance.init();
+        if (!instance.initied || instance.logQueue == null) {
+            return;
+        }
+        final long now = System.currentTimeMillis();
+        synchronized (FileLog.class) {
+            if (!force && now - instance.lastLogRotation < MIN_LOG_ROTATION_INTERVAL) {
+                return;
+            }
+            instance.lastLogRotation = now;
+        }
+        instance.logQueue.postRunnable(instance::rotateLogInternal);
+    }
+
+    public static File getCurrentLogFile() {
+        FileLog instance = Instance;
+        return instance != null ? instance.currentFile : null;
+    }
+
+    // ZaStoGram — сколько последних файлов логов хранить (0 = без ограничения).
+    public static final int DEFAULT_MAX_LOG_FILES = 50;
+
+    public static int getMaxLogFiles() {
+        try {
+            return ApplicationLoader.applicationContext
+                    .getSharedPreferences("systemConfig", Context.MODE_PRIVATE)
+                    .getInt("logsMaxFiles", DEFAULT_MAX_LOG_FILES);
+        } catch (Exception e) {
+            return DEFAULT_MAX_LOG_FILES;
+        }
+    }
+
+    /**
+     * ZaStoGram: удаляет старые файлы логов, оставляя только maxFiles самых свежих.
+     * Файлы текущей живой сессии никогда не удаляются. maxFiles &lt;= 0 — без ограничения.
+     * Делает только файловые операции — можно вызывать с любого фонового потока.
+     */
+    public static void pruneOldLogs(int maxFiles) {
+        if (maxFiles <= 0) {
+            return;
+        }
+        try {
+            File dir = AndroidUtilities.getLogsDir();
+            if (dir == null) {
+                return;
+            }
+            File current = getCurrentLogFile();
+            String prefix = null;
+            if (current != null) {
+                String name = current.getName();
+                int dot = name.indexOf('.');
+                prefix = dot > 0 ? name.substring(0, dot) : name;
+            }
+            File[] arr = dir.listFiles();
+            if (arr == null) {
+                return;
+            }
+            ArrayList<File> all = new ArrayList<>();
+            for (File f : arr) {
+                if (f != null && f.isFile() && !"logs.zip".equals(f.getName())) {
+                    all.add(f);
+                }
+            }
+            Collections.sort(all, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            int kept = 0;
+            for (File f : all) {
+                if (kept < maxFiles) {
+                    kept++;
+                    continue;
+                }
+                if (prefix != null && f.getName().startsWith(prefix)) {
+                    continue;
+                }
+                try {
+                    f.delete();
+                } catch (Exception ignore) {
+                }
+            }
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Выполняется строго на logQueue, поэтому не конфликтует с записью строк лога.
+    private void rotateLogInternal() {
+        try {
+            File dir = AndroidUtilities.getLogsDir();
+            if (dir == null) {
+                return;
+            }
+            if (streamWriter != null) {
+                try {
+                    streamWriter.write("-----end log-----\n");
+                    streamWriter.flush();
+                    streamWriter.close();
+                } catch (Exception ignore) {}
+            }
+            if (tlStreamWriter != null) {
+                try {
+                    tlStreamWriter.flush();
+                    tlStreamWriter.close();
+                } catch (Exception ignore) {}
+            }
+            String date = fileDateFormat.format(System.currentTimeMillis());
+            currentFile = new File(dir, date + ".txt");
+            tlRequestsFile = new File(dir, date + "_mtproto.txt");
+            currentFile.createNewFile();
+            streamWriter = new OutputStreamWriter(new FileOutputStream(currentFile));
+            streamWriter.write("-----start log " + date + "-----\n");
+            streamWriter.flush();
+            tlStreamWriter = new OutputStreamWriter(new FileOutputStream(tlRequestsFile));
+            tlStreamWriter.write("-----start log " + date + "-----\n");
+            tlStreamWriter.flush();
+            pruneOldLogs(getMaxLogFiles());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public static String getNetworkLogPath() {

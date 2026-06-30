@@ -157,8 +157,14 @@ private:
     bool scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6);
     bool mtProxyProbeBeginOrJoin(bool ipv6);
     void mtProxyProbeWaitTimerFire(bool ipv6);
-    void completeMtProxyProbeOwner(const char *reason);
+    void acquireMtProxyProbeLease(uint64_t token);
+    void releaseMtProxyProbeLease();
     void mtProxyProbeHeartbeat();
+    uint64_t mtProxyProbeOwnerToken = 0;
+    std::string mtProxyProbeLeaseKey;
+    std::string mtProxyProbeLeaseEndpointKey;
+    std::string mtProxyProbeLeaseNetworkEndpointKey;
+    uint32_t mtProxyProbeLeaseAllowedSni = 0;
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);
     bool scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6);

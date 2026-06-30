@@ -33,6 +33,11 @@ bool LOGS_ENABLED = false;
 #endif
 
 bool REF_LOGS_ENABLED = false;
+// Gates the high-frequency mtproxy_transport FSM churn (per-transition state_change / proxy_state_change /
+// tls_state_change / snapshot / socket-fd / epoll / close-notify lines). Default off so a normal logged
+// session stays readable; the low-frequency mtproxy_startup / mtproxy_disconnect lifecycle markers that
+// Tools/analyze_mtproxy_markers.py depends on remain on the plain LOGS_ENABLED tier. Flip to true (or wire
+// a JNI setter) to capture the full transport trace when debugging a probe/handshake issue.
 bool NETWORK_DEBUG_LOGS_ENABLED = false;
 
 static std::string formatNativeLogMessage(const char *message, va_list args) {
@@ -69,8 +74,28 @@ void FileLog::init(std::string path) {
     pthread_mutex_lock(&mutex);
     if (path.size() > 0 && logFile == nullptr) {
         logFile = fopen(path.c_str(), "w");
+        logPath = path;
+        logBytesWritten = 0;
     }
     pthread_mutex_unlock(&mutex);
+}
+
+// Native _net log is opened once with "w" and is never rotated by the Java side, so without a cap a
+// busy session (especially a proxy reconnect storm) grows the file unbounded -- 400+ MB in a few
+// minutes was observed. Cap each file and keep a single backup, so worst-case on-disk size is ~2x cap.
+static const size_t MAX_NATIVE_LOG_BYTES = 16 * 1024 * 1024;
+
+void FileLog::rotateNativeLogIfNeededLocked() {
+    if (logFile == nullptr || logPath.empty() || logBytesWritten < MAX_NATIVE_LOG_BYTES) {
+        return;
+    }
+    fclose(logFile);
+    logFile = nullptr;
+    std::string backup = logPath + ".1";
+    remove(backup.c_str());
+    rename(logPath.c_str(), backup.c_str());
+    logFile = fopen(logPath.c_str(), "w");
+    logBytesWritten = 0;
 }
 
 void FileLog::writeNativeLogLine(int androidPriority, const char *fileSeverity, const char *stdoutSeverity, const char *message, va_list args) {
@@ -107,10 +132,13 @@ void FileLog::writeNativeLogLine(int androidPriority, const char *fileSeverity, 
            formattedMessage.c_str());
     fflush(stdout);
 #endif
-    FILE *logFile = logger.logFile;
-    if (logFile) {
-        fprintf(logFile, "%s\n", line.c_str());
-        fflush(logFile);
+    if (logger.logFile) {
+        int written = fprintf(logger.logFile, "%s\n", line.c_str());
+        fflush(logger.logFile);
+        if (written > 0) {
+            logger.logBytesWritten += (size_t) written;
+        }
+        logger.rotateNativeLogIfNeededLocked();
     }
     pthread_mutex_unlock(&logger.mutex);
 }

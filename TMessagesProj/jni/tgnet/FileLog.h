@@ -26,7 +26,10 @@ public:
 
 private:
     static void writeNativeLogLine(int androidPriority, const char *fileSeverity, const char *stdoutSeverity, const char *message, va_list args);
+    void rotateNativeLogIfNeededLocked();
     FILE *logFile = nullptr;
+    std::string logPath;
+    size_t logBytesWritten = 0;
     pthread_mutex_t mutex;
 };
 

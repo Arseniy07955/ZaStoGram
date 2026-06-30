@@ -986,7 +986,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static int cancelProxyEndpointAttempts(String endpointKey, String probeKey, String reason) {
-        if (TextUtils.isEmpty(endpointKey)) {
+        if (TextUtils.isEmpty(endpointKey) && TextUtils.isEmpty(probeKey)) {
             return 0;
         }
         String nativeReason = TextUtils.isEmpty(reason) ? "unknown" : reason;
@@ -1106,13 +1106,24 @@ public class ConnectionsManager extends BaseController {
         onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, "", origin);
     }
 
+    // UI-thread-confined (every write happens inside the runOnUIThread lambda below): last logged
+    // proxy_connection_stage per account, used to log only on an actual stage transition.
+    private static final java.util.HashMap<Integer, String> lastLoggedProxyStage = new java.util.HashMap<>();
+
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin) {
         AndroidUtilities.runOnUIThread(() -> {
             ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin);
             ProxyRuntimeStateStore.onNativeStage(event);
             String normalizedDiagnostic = event.phase;
             if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("proxy_connection_stage account=" + currentAccount + " origin=" + event.origin.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey);
+                // The native side fires this callback on every transport state change (thousands/sec
+                // during a reconnect storm); logging each one was the bulk of the main-log spam. Only
+                // distinct transitions carry diagnostic value, so log on change of (phase, endpoint, probe).
+                String stageKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.probeKey;
+                if (!stageKey.equals(lastLoggedProxyStage.get(currentAccount))) {
+                    lastLoggedProxyStage.put(currentAccount, stageKey);
+                    FileLog.d("proxy_connection_stage account=" + currentAccount + " origin=" + event.origin.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey);
+                }
             }
             NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);
             AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName);

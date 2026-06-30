@@ -692,6 +692,8 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(1003, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_folders, "Плагины", "Python-плагины (совместимы с exteraGram)"));
         // ZaStoGram — каталог бесплатных прокси вынесен на отдельный экран (FreeProxySettingsActivity).
         items.add(SettingCell.Factory.of(1004, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_data, getString(R.string.FreeProxyChannels), "Каталог каналов и настройки прокси"));
+        // ZaStoGram — экран логов (всегда виден): просмотр, выборочная отправка, удаление.
+        items.add(SettingCell.Factory.of(1005, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_logs, getString(R.string.ZaLogsTitle), "Просмотр и отправка логов"));
         items.add(UItem.asShadow(null));
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
         items.add(SettingCell.Factory.of(2, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_chat, getString(R.string.SettingsChat), getString(R.string.SettingsChatInfo)));
@@ -751,14 +753,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(24, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_channel, getString(R.string.OurChannel)));
         items.add(SettingCell.Factory.of(25, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.OurVpn)));
         items.add(UItem.asShadow(null));
-
-        if (BuildVars.LOGS_ENABLED || BuildVars.DEBUG_PRIVATE_VERSION) {
-            items.add(UItem.asShadow(null));
-            items.add(UItem.asHeader(getString(R.string.SettingsDebug)));
-            items.add(SettingCell.Factory.of(20, 0xFF55CA47, 0xFF27B434, 0, getString(R.string.DebugSendLogs)));
-            items.add(SettingCell.Factory.of(21, 0xFF55CA47, 0xFF27B434, 0, getString(R.string.DebugSendLastLogs)));
-            items.add(SettingCell.Factory.of(22, 0xFFF45255, 0xFFDF3955, 0, getString(R.string.DebugClearLogs)));
-        }
 
         items.add(UItem.asCustomShadow(versionView));
     }
@@ -843,6 +837,9 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
             case 1004:
                 presentSettingFragment(new FreeProxySettingsActivity());
                 break;
+            case 1005:
+                presentSettingFragment(new LogsActivity());
+                break;
             case 7:
                 presentSettingFragment(new FiltersSetupActivity());
                 break;
@@ -886,15 +883,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 25:
                 Browser.openUrl(getParentActivity(), "https://t.me/vpndiscordyooutube");
-                break;
-            case 20:
-                ProfileActivity.sendLogs(getParentActivity(), false);
-                break;
-            case 21:
-                ProfileActivity.sendLogs(getParentActivity(), true);
-                break;
-            case 22:
-                FileLog.cleanupLogs();
                 break;
             case 23: {
                 if (MessagesController.getInstance(currentAccount).isFrozen()) {

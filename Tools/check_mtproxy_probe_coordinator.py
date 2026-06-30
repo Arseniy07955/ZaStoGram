@@ -224,6 +224,75 @@ def main() -> int:
         failures,
     )
 
+    # --- Commit 2: opaque uint64 ownership token + key-independent RAII lease (leak/ABA hardening) ---
+    require(
+        "uint64_t ownerToken" in coordinator_cpp and "uint64_t callerToken" in coordinator_h and "const void *owner" not in coordinator_h,
+        "probe ownership must be an opaque uint64 token, not a raw (ABA-prone) pointer",
+        failures,
+    )
+    require(
+        "mtProxyProbeOwnerTokenSeq" in coordinator_cpp and coordinator_cpp.count("mtProxyProbeOwnerTokenSeq++") == 1,
+        "owner tokens must be minted in exactly one place",
+        failures,
+    )
+    enter_start = coordinator_cpp.find("static uint64_t enterProbing(")
+    enter_end = coordinator_cpp.find("MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin", enter_start)
+    enter_body = coordinator_cpp[enter_start:enter_end] if enter_start >= 0 else ""
+    require(enter_start >= 0 and "mtProxyProbeOwnerTokenSeq++" in enter_body, "the owner-token mint must live inside enterProbing", failures)
+    require(
+        coordinator_cpp.count("status = ProbeStatus::PROBING") == 1 and "status = ProbeStatus::PROBING" in enter_body,
+        "status = PROBING must be written only inside enterProbing (single funnel)",
+        failures,
+    )
+    require(
+        "publishProxyConnectionStage" not in coordinator_cpp and "delegate->" not in coordinator_cpp and "CallStatic" not in coordinator_cpp,
+        "coordinator must make no JNI/delegate upcall under its mutex (strict leaf)",
+        failures,
+    )
+    require("pthread_mutex_destroy" not in coordinator_cpp, "coordinator mutex must never be destroyed", failures)
+    require(".erase(" in coordinator_cpp, "reapExpired must bound the probe-state map by erasing dead entries", failures)
+    require(
+        "completeMtProxyProbeOwner" not in socket_cpp and "completeMtProxyProbeOwner" not in socket_h,
+        "the leak-prone, key-dependent completeMtProxyProbeOwner must be removed in favour of the RAII lease",
+        failures,
+    )
+    require(
+        "acquireMtProxyProbeLease" in socket_cpp and "releaseMtProxyProbeLease" in socket_cpp
+        and "mtProxyProbeOwnerToken" in socket_h and "mtProxyProbeLeaseKey" in socket_cpp,
+        "ConnectionSocket must hold a token+key lease released key-independently",
+        failures,
+    )
+    open_conn_idx = socket_cpp.find("void ConnectionSocket::openConnection(std::string address")
+    open_release_idx = socket_cpp.find("releaseMtProxyProbeLease()", open_conn_idx)
+    open_scrub_idx = socket_cpp.find('currentMtProxyProbeKey = ""', open_conn_idx)
+    require(
+        open_conn_idx >= 0 and open_release_idx >= 0 and open_scrub_idx >= 0 and open_release_idx < open_scrub_idx,
+        "openConnection must release the probe lease before scrubbing the probe key",
+        failures,
+    )
+    close_idx = socket_cpp.find("void ConnectionSocket::closeSocket(")
+    close_recfail_idx = socket_cpp.find("recordMtProxyEndpointFailure(terminalDiagnostic", close_idx)
+    close_release_idx = socket_cpp.find("releaseMtProxyProbeLease()", close_idx)
+    require(
+        close_idx >= 0 and close_recfail_idx >= 0 and close_release_idx >= 0 and close_recfail_idx < close_release_idx,
+        "closeSocket must record the failure while the token is live, then release the lease (no phantom re-mint)",
+        failures,
+    )
+    # --- Commit 3: admission_queue JNI out of lock + probeKey-only Java cancel ---
+    sched_lock_idx = socket_cpp.find("pthread_mutex_lock(&proxyHandshakeSchedulerMutex)")
+    sched_unlock_idx = socket_cpp.find("pthread_mutex_unlock(&proxyHandshakeSchedulerMutex)", sched_lock_idx)
+    admq_idx = socket_cpp.find('publishProxyConnectionStage("admission_queue")')
+    require(
+        "publishAdmissionQueue" in socket_cpp and admq_idx >= 0 and not (sched_lock_idx < admq_idx < sched_unlock_idx),
+        "admission_queue JNI publish must be hoisted out of proxyHandshakeSchedulerMutex (lock-order-inversion safety)",
+        failures,
+    )
+    require(
+        "TextUtils.isEmpty(endpointKey) && TextUtils.isEmpty(probeKey)" in java_connections,
+        "Java cancelProxyEndpointAttempts must accept a probeKey-only kill-switch",
+        failures,
+    )
+
     verify_runtime_contract(failures)
 
     if failures:

@@ -342,6 +342,9 @@ public class ApplicationLoader extends Application {
                 super.onActivityStarted(activity);
                 if (wasInBackground) {
                     ensureCurrentNetworkGet(true);
+                    // ZaStoGram — каждый выход на передний план начинает новый файл лога,
+                    // чтобы логи разных запусков не путались (с защитой от дребезга внутри).
+                    FileLog.rotateLog();
                 }
             }
         };

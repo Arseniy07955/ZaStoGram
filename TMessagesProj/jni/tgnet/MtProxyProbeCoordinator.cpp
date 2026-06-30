@@ -36,7 +36,7 @@ enum class ProbeStatus : uint8_t {
 
 struct MtProxyProbeState {
     ProbeStatus status = ProbeStatus::IDLE;
-    const void *owner = nullptr;
+    uint64_t ownerToken = 0;
     uint32_t generation = 0;
     int64_t unsupportedUntil = 0;
     int64_t probingUntil = 0;
@@ -56,11 +56,16 @@ struct MtProxyProbeState {
 
 static pthread_mutex_t mtProxyProbeCoordinatorMutex = PTHREAD_MUTEX_INITIALIZER;
 static std::map<std::string, MtProxyProbeState> mtProxyProbeStates;
+// Opaque, monotonic, never-reused owner identity (minted ONLY inside enterProbing, always under
+// mtProxyProbeCoordinatorMutex). Replaces the ABA-prone raw `this` pointer so a recycled
+// ConnectionSocket address can never be mistaken for a stale entry's owner.
+static uint64_t mtProxyProbeOwnerTokenSeq = 1;
 
 static MtProxyProbeCoordinator::Decision decisionFromState(MtProxyProbeCoordinator::DecisionKind kind, const MtProxyProbeState &state) {
     MtProxyProbeCoordinator::Decision decision;
     decision.kind = kind;
     decision.generation = state.generation;
+    decision.ownerToken = state.ownerToken;
     decision.waitMs = MT_PROXY_PROBE_JOIN_WAIT_MS;
     decision.cursor = state.cursor;
     decision.workingCursor = state.workingCursor;
@@ -73,7 +78,19 @@ static MtProxyProbeCoordinator::Decision decisionFromState(MtProxyProbeCoordinat
     return decision;
 }
 
-MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const ProbeKey &probeKey, const void *owner, int64_t now) {
+// SOLE writer of status = PROBING and the SOLE site that mints an owner token. Every StartOwner is a
+// fresh owner episode (the caller holds no lease at beginOrJoin time because openConnection releases
+// it first), so this always mints a new, never-reused token and refreshes the deadline. Ownership
+// continuity across a connection's recipe ladder is carried by the probe key + the per-attempt lease,
+// not by the token. Must be called with mtProxyProbeCoordinatorMutex held. Returns the owner token.
+static uint64_t enterProbing(MtProxyProbeState &state, int64_t now) {
+    state.ownerToken = mtProxyProbeOwnerTokenSeq++;
+    state.status = ProbeStatus::PROBING;
+    state.probingUntil = now + MT_PROXY_PROBE_OWNER_DEADLINE_MS;
+    return state.ownerToken;
+}
+
+MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const ProbeKey &probeKey, uint64_t callerToken, int64_t now) {
     if (probeKey.key.empty()) {
         return Decision();
     }
@@ -95,7 +112,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     }
     if (state.status == ProbeStatus::UNSUPPORTED && state.unsupportedUntil <= now) {
         state.status = ProbeStatus::IDLE;
-        state.owner = nullptr;
+        state.ownerToken = 0;
         state.unsupportedUntil = 0;
     }
     if (state.status == ProbeStatus::WORKING_RECIPE_FOUND) {
@@ -107,14 +124,14 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     // a leaked or wedged owner must never strand joiners forever. The recipe cursor is kept so
     // the next owner resumes the ladder instead of restarting it (INV-1b).
     if (state.status == ProbeStatus::PROBING
-            && (state.owner == nullptr
+            && (state.ownerToken == 0
                 || (state.probingUntil != 0 && state.probingUntil <= now))) {
         state.status = ProbeStatus::IDLE;
-        state.owner = nullptr;
+        state.ownerToken = 0;
         state.joinBudgetAnchorMs = 0;
         state.joinBudgetAnchorCursorGen = 0;
     }
-    if (state.status == ProbeStatus::PROBING && state.owner != nullptr && state.owner != owner) {
+    if (state.status == ProbeStatus::PROBING && state.ownerToken != 0 && state.ownerToken != callerToken) {
         // A live owner is probing. Join it only while it makes forward progress within a bounded
         // budget; a wedged owner (no recipe-cursor advance and no handshake heartbeat) must not
         // strand this caller, so fall through to StartOwner and let it self-connect (INV-4).
@@ -138,9 +155,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
             && !((state.allowedSniVariants & MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_ORIGINAL)) != 0)) {
         state.cursor = MtProxyAdaptivePolicy::initialCursor(state.allowedSniVariants);
     }
-    state.status = ProbeStatus::PROBING;
-    state.owner = owner;
-    state.probingUntil = now + MT_PROXY_PROBE_OWNER_DEADLINE_MS;
+    enterProbing(state, now);
     state.joinBudgetAnchorMs = 0;
     state.joinBudgetAnchorCursorGen = 0;
     state.generation++;
@@ -150,7 +165,7 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
 }
 
 MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(const ProbeKey &probeKey,
-                                                                                const void *owner,
+                                                                                uint64_t callerToken,
                                                                                 const std::string &diagnostic,
                                                                                 bool recipeUsesGrease,
                                                                                 bool recipeIsGreaseProbe,
@@ -163,14 +178,14 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
 
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
-    if (state.owner != nullptr && state.owner != owner) {
+    // Reject a failure from a displaced/stale owner: a different live owner now holds the entry.
+    if (state.ownerToken != 0 && callerToken != 0 && state.ownerToken != callerToken) {
         result.generation = state.generation;
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return result;
     }
-    state.status = ProbeStatus::PROBING;
-    state.owner = owner;
-    state.probingUntil = now + MT_PROXY_PROBE_OWNER_DEADLINE_MS;
+    // The cursor advances below; the owning connection's lease.release() in closeSocket demotes this
+    // entry to IDLE immediately after, so completeFailure must NOT mint/re-enter PROBING here (HANG-7).
     state.endpointKey = probeKey.endpointKey;
     state.networkEndpointKey = probeKey.networkEndpointKey;
     if (probeKey.allowedSniVariants != 0) {
@@ -198,7 +213,9 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
     if (result.recipeExhausted) {
         state.status = ProbeStatus::UNSUPPORTED;
         state.unsupportedUntil = now + MT_PROXY_PROBE_UNSUPPORTED_HOLD_MS;
-        state.owner = nullptr;
+        state.ownerToken = 0;
+        state.joinBudgetAnchorMs = 0;
+        state.joinBudgetAnchorCursorGen = 0;
         state.generation++;
     }
     result.recorded = true;
@@ -211,12 +228,11 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
 }
 
 void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
-                                              const void *owner,
+                                              uint64_t callerToken,
                                               const char *reason,
                                               bool recipeUsesGrease,
                                               const MtProxyAdaptivePolicy::CompatibilityRecipe &recipe,
                                               int64_t now) {
-    (void) now;
     if (probeKey.key.empty() || reason == nullptr) {
         return;
     }
@@ -228,7 +244,14 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
 
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
-    if (state.owner != nullptr && state.owner != owner && state.status == ProbeStatus::PROBING) {
+    // Never override an active quarantine hold.
+    if (state.status == ProbeStatus::UNSUPPORTED && state.unsupportedUntil > now) {
+        pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
+        return;
+    }
+    // Token-strict: only the current PROBING owner may publish a working recipe. A reclaimed entry
+    // (ownerToken == 0) or a displaced owner (token mismatch) must NOT clobber a successor (HANG-8).
+    if (state.status == ProbeStatus::PROBING && (callerToken == 0 || callerToken != state.ownerToken)) {
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return;
     }
@@ -237,11 +260,19 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
     if (probeKey.allowedSniVariants != 0) {
         state.allowedSniVariants = probeKey.allowedSniVariants;
     }
-    state.workingCursor = state.cursor;
-    state.workingRecipe = recipe;
-    state.status = ProbeStatus::WORKING_RECIPE_FOUND;
-    state.owner = nullptr;
-    state.lastRecipeDiagnostic.clear();
+    // Publish the proven recipe ONLY when no working recipe exists yet (first success of the episode).
+    // A later success on an already-WORKING entry — the owner's second milestone, a grease probe, or a
+    // displaced ex-owner arriving late — must NOT overwrite the authoritative recipe/cursor (closes the
+    // HANG-8 recipe clobber); only the grease-support flags below are refreshed. First-success-wins.
+    if (state.status != ProbeStatus::WORKING_RECIPE_FOUND) {
+        state.workingCursor = state.cursor;
+        state.workingRecipe = recipe;
+        state.status = ProbeStatus::WORKING_RECIPE_FOUND;
+        state.ownerToken = 0;
+        state.joinBudgetAnchorMs = 0;
+        state.joinBudgetAnchorCursorGen = 0;
+        state.lastRecipeDiagnostic.clear();
+    }
     if (recipeUsesGrease) {
         state.greaseProbePending = false;
         state.greaseSupported = true;
@@ -252,31 +283,33 @@ void MtProxyProbeCoordinator::completeSuccess(const ProbeKey &probeKey,
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 
-void MtProxyProbeCoordinator::completeUnsupported(const ProbeKey &probeKey, const void *owner, int64_t now) {
+void MtProxyProbeCoordinator::completeUnsupported(const ProbeKey &probeKey, uint64_t callerToken, int64_t now) {
     if (probeKey.key.empty()) {
         return;
     }
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
-    if (state.owner != nullptr && state.owner != owner) {
+    if (state.ownerToken != 0 && callerToken != 0 && state.ownerToken != callerToken) {
         pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
         return;
     }
     state.status = ProbeStatus::UNSUPPORTED;
-    state.owner = nullptr;
+    state.ownerToken = 0;
+    state.joinBudgetAnchorMs = 0;
+    state.joinBudgetAnchorCursorGen = 0;
     state.unsupportedUntil = now + MT_PROXY_PROBE_UNSUPPORTED_HOLD_MS;
     state.generation++;
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 
-void MtProxyProbeCoordinator::cancelOwner(const ProbeKey &probeKey, const void *owner) {
-    if (probeKey.key.empty()) {
+void MtProxyProbeCoordinator::cancelOwner(const ProbeKey &probeKey, uint64_t token) {
+    if (probeKey.key.empty() || token == 0) {
         return;
     }
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     auto it = mtProxyProbeStates.find(probeKey.key);
-    if (it != mtProxyProbeStates.end() && it->second.owner == owner) {
-        it->second.owner = nullptr;
+    if (it != mtProxyProbeStates.end() && it->second.ownerToken == token) {
+        it->second.ownerToken = 0;
         it->second.joinBudgetAnchorMs = 0;
         it->second.joinBudgetAnchorCursorGen = 0;
         if (it->second.status == ProbeStatus::PROBING) {
@@ -286,15 +319,15 @@ void MtProxyProbeCoordinator::cancelOwner(const ProbeKey &probeKey, const void *
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
 }
 
-void MtProxyProbeCoordinator::touchOwner(const ProbeKey &probeKey, const void *owner, int64_t now) {
-    if (probeKey.key.empty()) {
+void MtProxyProbeCoordinator::touchOwner(const ProbeKey &probeKey, uint64_t token, int64_t now) {
+    if (probeKey.key.empty() || token == 0) {
         return;
     }
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
     auto it = mtProxyProbeStates.find(probeKey.key);
     if (it != mtProxyProbeStates.end()
             && it->second.status == ProbeStatus::PROBING
-            && it->second.owner == owner) {
+            && it->second.ownerToken == token) {
         // The owner reached a handshake milestone: refresh its deadline and reset the joiner
         // budget so a healthy-but-slow owner keeps joiners parked instead of being abandoned (INV-4b).
         it->second.probingUntil = now + MT_PROXY_PROBE_OWNER_DEADLINE_MS;
@@ -306,21 +339,35 @@ void MtProxyProbeCoordinator::touchOwner(const ProbeKey &probeKey, const void *o
 
 void MtProxyProbeCoordinator::reapExpired(int64_t now) {
     pthread_mutex_lock(&mtProxyProbeCoordinatorMutex);
-    for (auto &entry : mtProxyProbeStates) {
-        MtProxyProbeState &state = entry.second;
+    for (auto it = mtProxyProbeStates.begin(); it != mtProxyProbeStates.end();) {
+        MtProxyProbeState &state = it->second;
         if (state.status == ProbeStatus::PROBING
                 && state.probingUntil != 0 && state.probingUntil <= now) {
             // Wedged/leaked owner that no joiner is re-querying: demote to ownerless IDLE,
             // preserving the recipe cursor. A PROBING entry is never erased here.
             state.status = ProbeStatus::IDLE;
-            state.owner = nullptr;
+            state.ownerToken = 0;
             state.joinBudgetAnchorMs = 0;
             state.joinBudgetAnchorCursorGen = 0;
         } else if (state.status == ProbeStatus::UNSUPPORTED
                 && state.unsupportedUntil != 0 && state.unsupportedUntil <= now) {
             state.status = ProbeStatus::IDLE;
-            state.owner = nullptr;
+            state.ownerToken = 0;
             state.unsupportedUntil = 0;
+        }
+        // Bound map growth over a long session: erase a fully-dead entry that carries no useful
+        // state. WORKING recipes, active UNSUPPORTED quarantines, PROBING owners, and IDLE entries
+        // that still hold recipe-ladder progress (cursor.generation > 0) are all preserved.
+        if (state.status == ProbeStatus::IDLE
+                && state.ownerToken == 0
+                && state.workingRecipe.familyName.empty()
+                && state.cursor.generation == 0
+                && !state.greaseProbePending
+                && !state.greaseSupported
+                && !state.greaseRejected) {
+            it = mtProxyProbeStates.erase(it);
+        } else {
+            ++it;
         }
     }
     pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);

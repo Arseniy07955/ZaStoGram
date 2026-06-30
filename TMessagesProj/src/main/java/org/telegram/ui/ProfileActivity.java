@@ -4515,11 +4515,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             } else if (position == policyRow) {
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
             } else if (position == sendLogsRow) {
-                sendLogs(getParentActivity(), false);
-            } else if (position == sendLastLogsRow) {
-                sendLogs(getParentActivity(), true);
-            } else if (position == clearLogsRow) {
-                FileLog.cleanupLogs();
+                presentFragment(new LogsActivity());
             } else if (position == switchBackendRow) {
                 if (getParentActivity() == null) {
                     return;
@@ -10593,9 +10589,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     debugHeaderRow = rowCount++;
                 }
                 if (BuildVars.LOGS_ENABLED) {
+                    // ZaStoGram — одна строка «Логи» вместо трёх кнопок: открывает экран логов.
                     sendLogsRow = rowCount++;
-                    sendLastLogsRow = rowCount++;
-                    clearLogsRow = rowCount++;
                 }
                 if (BuildVars.DEBUG_VERSION) {
                     switchBackendRow = rowCount++;
@@ -13722,11 +13717,7 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                     } else if (position == policyRow) {
                         textCell.setTextAndIcon(LocaleController.getString(R.string.PrivacyPolicy), R.drawable.msg2_policy, false);
                     } else if (position == sendLogsRow) {
-                        textCell.setText(LocaleController.getString(R.string.DebugSendLogs), true);
-                    } else if (position == sendLastLogsRow) {
-                        textCell.setText(LocaleController.getString(R.string.DebugSendLastLogs), true);
-                    } else if (position == clearLogsRow) {
-                        textCell.setText(LocaleController.getString(R.string.DebugClearLogs), switchBackendRow != -1);
+                        textCell.setText(LocaleController.getString(R.string.ZaLogsTitle), switchBackendRow != -1);
                     } else if (position == switchBackendRow) {
                         textCell.setText("Switch Backend", false);
                     } else if (position == devicesRow) {

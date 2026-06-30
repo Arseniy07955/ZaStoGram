@@ -926,10 +926,23 @@ public final class ProxyRuntimeStateStore {
         }
     }
 
+    private static String lastControlMessage;
+
     private static void logControl(String message) {
-        if (BuildVars.LOGS_ENABLED) {
-            FileLog.d("proxy_control " + message);
+        if (!BuildVars.LOGS_ENABLED) {
+            return;
         }
+        // Collapse runs of identical control decisions. A churning/rotated-away proxy can re-emit the
+        // same decision (e.g. ignored_rotated_away) thousands of times per second; only the transition
+        // carries diagnostic value, so suppress consecutive duplicates. This was ~200k of the main-log
+        // lines in a 4-minute capture.
+        synchronized (ProxyRuntimeStateStore.class) {
+            if (message.equals(lastControlMessage)) {
+                return;
+            }
+            lastControlMessage = message;
+        }
+        FileLog.d("proxy_control " + message);
     }
 
     private static void logRotation(String message) {

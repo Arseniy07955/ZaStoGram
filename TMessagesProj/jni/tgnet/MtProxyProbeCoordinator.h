@@ -37,6 +37,7 @@ public:
         DecisionKind kind = DecisionKind::StartOwner;
         uint32_t generation = 0;
         uint32_t waitMs = 0;
+        uint64_t ownerToken = 0;
         MtProxyAdaptivePolicy::RecipeCursor cursor;
         MtProxyAdaptivePolicy::RecipeCursor workingCursor;
         MtProxyAdaptivePolicy::CompatibilityRecipe workingRecipe;
@@ -53,23 +54,23 @@ public:
         std::string lastRecipeDiagnostic;
     };
 
-    static Decision beginOrJoin(const ProbeKey &probeKey, const void *owner, int64_t now);
+    static Decision beginOrJoin(const ProbeKey &probeKey, uint64_t callerToken, int64_t now);
     static FailureResult completeFailure(const ProbeKey &probeKey,
-                                         const void *owner,
+                                         uint64_t callerToken,
                                          const std::string &diagnostic,
                                          bool recipeUsesGrease,
                                          bool recipeIsGreaseProbe,
                                          bool classicFallbackAllowed,
                                          int64_t now);
     static void completeSuccess(const ProbeKey &probeKey,
-                                const void *owner,
+                                uint64_t callerToken,
                                 const char *reason,
                                 bool recipeUsesGrease,
                                 const MtProxyAdaptivePolicy::CompatibilityRecipe &recipe,
                                 int64_t now);
-    static void completeUnsupported(const ProbeKey &probeKey, const void *owner, int64_t now);
-    static void cancelOwner(const ProbeKey &probeKey, const void *owner);
-    static void touchOwner(const ProbeKey &probeKey, const void *owner, int64_t now);
+    static void completeUnsupported(const ProbeKey &probeKey, uint64_t callerToken, int64_t now);
+    static void cancelOwner(const ProbeKey &probeKey, uint64_t token);
+    static void touchOwner(const ProbeKey &probeKey, uint64_t token, int64_t now);
     static void reapExpired(int64_t now);
 
     static bool failureNeedsRecipe(const std::string &diagnostic);

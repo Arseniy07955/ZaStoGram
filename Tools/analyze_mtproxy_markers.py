@@ -386,6 +386,7 @@ class Attempt:
             "probe_terminal_unsupported": "probe_terminal_unsupported",
             "probe_wait_timer_fire": "probe_wait_timer_fire",
             "probe_owner_complete": "probe_owner_complete",
+            "probe_owner_release": "probe_owner_release",
             "endpoint_failure_shadowed_by_success": "endpoint_failure_shadowed_by_success",
             "shadowed_socket_failure": "shadowed_socket_failure",
             "ignored_cancelled_generation": "ignored_cancelled_generation",
