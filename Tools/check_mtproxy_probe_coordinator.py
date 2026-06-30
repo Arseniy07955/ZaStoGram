@@ -187,6 +187,43 @@ def main() -> int:
     require("matchesMtProxyProbeKey" in socket_h and "matchesMtProxyProbeKey" in socket_cpp, "ConnectionSocket must match cancellation by probeKey", failures)
     require("terminal_quarantine" in runtime and "probeKey" in verifier, "runtime verifier must enforce probe-keyed terminal quarantine", failures)
 
+    # --- Commit 1: bounded PROBING lifetime + recipe-progress self-connect budget + reaper (liveness) ---
+    require(
+        "MT_PROXY_PROBE_OWNER_DEADLINE_MS" in coordinator_cpp and "Connection.cpp" in coordinator_cpp,
+        "PROBING owners must carry a bounded deadline sized against the worst owner attempt (Connection.cpp)",
+        failures,
+    )
+    require("MT_PROXY_PROBE_JOIN_TOTAL_BUDGET_MS" in coordinator_cpp, "joiners must have a bounded self-connect budget", failures)
+    require("probingUntil" in coordinator_cpp, "coordinator must track a per-owner PROBING deadline (probingUntil)", failures)
+    begin_or_join_start = coordinator_cpp.find("MtProxyProbeCoordinator::beginOrJoin")
+    begin_or_join_end = coordinator_cpp.find("MtProxyProbeCoordinator::completeFailure", begin_or_join_start)
+    begin_or_join_body = coordinator_cpp[begin_or_join_start:begin_or_join_end]
+    reclaim_idx = begin_or_join_body.find("state.probingUntil <= now")
+    join_existing_idx = begin_or_join_body.find("DecisionKind::JoinExisting")
+    require(
+        reclaim_idx >= 0 and join_existing_idx >= 0 and reclaim_idx < join_existing_idx,
+        "beginOrJoin must reclaim an expired/ownerless PROBING owner before any JoinExisting decision",
+        failures,
+    )
+    require(
+        "state.cursor.generation != state.joinBudgetAnchorCursorGen" in begin_or_join_body,
+        "join budget must be anchored to recipe-cursor progress, not bare generation",
+        failures,
+    )
+    require("reapExpired" not in begin_or_join_body, "the reaper must run on the network-thread tick, not inside beginOrJoin", failures)
+    require(
+        "void MtProxyProbeCoordinator::touchOwner" in coordinator_cpp
+        and "void MtProxyProbeCoordinator::reapExpired" in coordinator_cpp,
+        "coordinator must define the owner heartbeat (touchOwner) and the deadline reaper (reapExpired)",
+        failures,
+    )
+    require("MtProxyProbeCoordinator::reapExpired(now)" in manager_cpp, "ConnectionsManager::select must reap expired PROBING owners on its monotonic tick", failures)
+    require(
+        "mtProxyProbeHeartbeat" in socket_cpp and "mtProxyProbeHeartbeat" in socket_h,
+        "ConnectionSocket must heartbeat the probe owner at handshake milestones (socket_connected/client_hello_sent)",
+        failures,
+    )
+
     verify_runtime_contract(failures)
 
     if failures:

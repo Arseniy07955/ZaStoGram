@@ -2955,6 +2955,18 @@ void ConnectionSocket::completeMtProxyProbeOwner(const char *reason) {
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup probe_owner_complete key=%s reason=%s", this, currentMtProxyProbeKey.c_str(), reason != nullptr ? reason : "unknown");
 }
 
+void ConnectionSocket::mtProxyProbeHeartbeat() {
+    if (!isCurrentMtProxyConnection() || !currentSecretIsFakeTls || currentMtProxyProbeKey.empty()) {
+        return;
+    }
+    MtProxyProbeCoordinator::ProbeKey probeKey;
+    probeKey.key = currentMtProxyProbeKey;
+    probeKey.endpointKey = currentMtProxyEndpointKey;
+    probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
+    probeKey.allowedSniVariants = currentAllowedSniVariants;
+    MtProxyProbeCoordinator::touchOwner(probeKey, this, ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis());
+}
+
 bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) {
     if (!isCurrentMtProxyConnection() || currentMtProxyNetworkEndpointKey.empty()) {
         return false;
@@ -5800,6 +5812,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 setMtProxySocketConnectedLogged(true, "socket_connected");
                 proxyCheckDiagnostic = "tcp_connected_no_pong";
                 publishProxyConnectionStage("socket_connected");
+                mtProxyProbeHeartbeat();
                 releaseMtProxyEndpointTcpConnect("socket_connected");
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup socket_connected state=%d tls=%d secret_kind=%s", this, (int) proxyAuthState, (int) tlsState, currentSecretKind);
             }
@@ -5851,6 +5864,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         clearPendingClientHello();
                         proxyCheckDiagnostic = "faketls_server_hello_wait_timeout";
                         publishProxyConnectionStage("client_hello_sent");
+                        mtProxyProbeHeartbeat();
                         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup client_hello_sent bytes=%u expected=%u domain_len=%d sni_variant=%s", this, size, size, (int) currentClientHelloSni.size(), MtProxyAdaptivePolicy::sniVariantName(currentRecipeSniVariant));
                         markProxyHandshakeClientHelloSent();
                         adjustWriteOp();

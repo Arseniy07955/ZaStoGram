@@ -36,6 +36,7 @@
 #include "ProxyCheckInfo.h"
 #include "Handshake.h"
 #include "WssTransport.h"
+#include "MtProxyProbeCoordinator.h"
 
 #ifdef ANDROID
 #include <jni.h>
@@ -289,6 +290,13 @@ void ConnectionsManager::select() {
     std::copy(std::begin(activeConnections), std::end(activeConnections), std::begin(activeConnectionsCopy));
     for (auto connection : activeConnectionsCopy) {
         connection->checkTimeout(now);
+    }
+    // Backstop reclaim of wedged/leaked PROBING owners and expired UNSUPPORTED holds on the
+    // existing monotonic (CLOCK_BOOTTIME) network-thread tick. Throttled; never holds a map ref
+    // across mutation, takes only the coordinator mutex, and calls no JNI.
+    if (now - lastProbeReapMs >= 1000) {
+        lastProbeReapMs = now;
+        MtProxyProbeCoordinator::reapExpired(now);
     }
 
     Datacenter *datacenter = getDatacenterWithId(currentDatacenterId);

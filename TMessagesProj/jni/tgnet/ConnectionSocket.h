@@ -158,6 +158,7 @@ private:
     bool mtProxyProbeBeginOrJoin(bool ipv6);
     void mtProxyProbeWaitTimerFire(bool ipv6);
     void completeMtProxyProbeOwner(const char *reason);
+    void mtProxyProbeHeartbeat();
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);
     bool scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6);
