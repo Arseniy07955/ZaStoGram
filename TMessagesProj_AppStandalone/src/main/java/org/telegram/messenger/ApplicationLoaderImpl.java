@@ -31,9 +31,110 @@ import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.SMSStatsActivity;
 import org.telegram.ui.SMSSubscribeSheet;
 
+import org.telegram.messenger.browser.Browser;
+import org.telegram.ui.web.HttpGetFileTask;
+import org.telegram.ui.web.HttpGetTask;
+
 import java.io.File;
 
 public class ApplicationLoaderImpl extends ApplicationLoader {
+
+    private BetaUpdate pendingUpdate;
+
+    @Override
+    public boolean isCustomUpdate() {
+        return true;
+    }
+
+    @Override
+    public void checkUpdate(boolean force, Runnable whenDone) {
+        String url = "https://raw.githubusercontent.com/Arseniy07955/ZaStoGram/master/update.json";
+        new HttpGetTask(result -> {
+            if (result != null) {
+                try {
+                    JSONObject json = new JSONObject(result);
+                    int versionCode = json.getInt("version_code");
+                    String versionName = json.getString("version_name");
+                    String changelog = json.optString("changelog", "");
+
+                    if (versionCode > BuildConfig.VERSION_CODE) {
+                        pendingUpdate = new BetaUpdate(versionName, versionCode, changelog);
+                    } else {
+                        pendingUpdate = null;
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+            if (whenDone != null) {
+                whenDone.run();
+            }
+        }).execute(url);
+    }
+
+    @Override
+    public BetaUpdate getUpdate() {
+        return pendingUpdate;
+    }
+
+    @Override
+    public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
+        String abi = Build.SUPPORTED_ABIS[0];
+        String downloadUrl = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork%2FTelegaNEW-standalone-" + abi + ".apk";
+
+        new AlertDialog.Builder(context)
+                .setTitle(LocaleController.getString(R.string.AppUpdate))
+                .setMessage(update.changelog != null && !update.changelog.isEmpty() ? update.changelog : LocaleController.formatString("AppUpdateVersionAndSize", R.string.AppUpdateVersionAndSize, update.version, ""))
+                .setPositiveButton(LocaleController.getString(R.string.AppUpdateDownloadNow), (dialog, which) -> {
+                    showDownloadProgressDialog(context, downloadUrl);
+                })
+                .setNegativeButton(LocaleController.getString(R.string.AppUpdateRemindMeLater), null)
+                .show();
+        return true;
+    }
+
+    private void showDownloadProgressDialog(Context context, String url) {
+        AlertDialog progressDialog = new AlertDialog(context, 2); // 2 is ALERT_TYPE_LOADING
+        progressDialog.setMessage(LocaleController.getString(R.string.Loading));
+        progressDialog.setCanceledOnTouchOutside(false);
+        progressDialog.show();
+
+        new HttpGetFileTask(file -> {
+            progressDialog.dismiss();
+            if (file != null) {
+                openApkInstall((Activity) context, file);
+            } else {
+                BulletinFactory.global().createErrorBulletin("Download failed").show();
+            }
+        }, progress -> {
+            // progress updates can be handled here if we had a progress bar in AlertDialog
+        }).execute(url);
+    }
+
+    public boolean openApkInstall(Activity activity, File f) {
+        boolean exists = false;
+        try {
+            if (exists = f.exists()) {
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                if (Build.VERSION.SDK_INT >= 24) {
+                    intent.setDataAndType(FileProvider.getUriForFile(activity, ApplicationLoader.getApplicationId() + ".provider", f), "application/vnd.android.package-archive");
+                } else {
+                    intent.setDataAndType(Uri.fromFile(f), "application/vnd.android.package-archive");
+                }
+                try {
+                    activity.startActivityForResult(intent, 500);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return exists;
+    }
+
     @Override
     protected String onGetApplicationId() {
         return BuildConfig.APPLICATION_ID;
