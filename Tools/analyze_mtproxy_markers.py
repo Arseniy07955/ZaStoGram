@@ -15,6 +15,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mtproxy_phase_contract import evidence_for_phase as mtproxy_evidence_for_phase
+
 
 CONNECTION_RE = re.compile(r"connection\((0x[0-9a-fA-F]+)")
 ACCOUNT_CONNECT_RE = re.compile(
@@ -60,6 +62,7 @@ SCHEDULER_APPLIED_RE = re.compile(
 SCHEDULER_PHASE_RE = re.compile(r"(?<![A-Za-z0-9_])phase=([^ ]+)")
 SCHEDULER_DIAGNOSTIC_RE = re.compile(r"(?<![A-Za-z0-9_])diagnostic=([^ ]+)")
 TIME_RE = re.compile(r"^[0-9]{2}-[0-9]{2} ([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})")
+FIELD_RE_TEMPLATE = r"(?<![A-Za-z0-9_]){}=([^ ]+)"
 
 FAKETLS_FAILURE_VERDICTS = {
     "connection_not_started",
@@ -113,6 +116,16 @@ def event_marker_matches(text: str, needle: str) -> bool:
     return re.search(r"(?<![A-Za-z0-9_])" + re.escape(needle) + r"(?![A-Za-z0-9_])", text) is not None
 
 
+def line_field(text: str, name: str) -> str:
+    match = re.search(FIELD_RE_TEMPLATE.format(re.escape(name)), text)
+    return match.group(1) if match else ""
+
+
+def line_int_field(text: str, name: str) -> int:
+    value = line_field(text, name)
+    return int(value) if value.isdigit() else 0
+
+
 @dataclass
 class Attempt:
     key: str
@@ -138,6 +151,9 @@ class Attempt:
     priority: str = ""
     connection_pattern: str = ""
     transport_state: str = ""
+    failure_phase: str = ""
+    failure_evidence: str = ""
+    server_response_bytes: int = 0
     disconnect: str = ""
     disconnect_reason: str = ""
     disconnect_error: str = ""
@@ -299,6 +315,23 @@ class Attempt:
         transport_state = TRANSPORT_STATE_RE.search(text)
         if transport_state:
             self.transport_state = transport_state.group(1)
+        response_bytes = line_int_field(text, "response_bytes")
+        if response_bytes:
+            self.server_response_bytes = max(self.server_response_bytes, response_bytes)
+        if event_marker_matches(text, "mtproxy_tls_after_client_hello"):
+            self.server_response_bytes = max(self.server_response_bytes, line_int_field(text, "bytes"))
+        line_evidence = line_field(text, "evidence")
+        if line_evidence:
+            self.failure_evidence = line_evidence
+        line_phase = ""
+        if event_marker_matches(text, "recipe_exhausted"):
+            line_phase = line_field(text, "failed_phase")
+        elif event_marker_matches(text, "recipe_failed") or event_marker_matches(text, "close_diagnostic"):
+            line_phase = line_field(text, "phase")
+        if line_phase:
+            self.failure_phase = line_phase
+            if not self.failure_evidence:
+                self.failure_evidence = mtproxy_evidence_for_phase(line_phase, self.server_response_bytes)
 
         profile = PROFILE_RE.search(text)
         if profile:
@@ -556,6 +589,12 @@ class Attempt:
             return "ok"
         return "handshake_ok_no_appdata_sent"
 
+    def evidence(self) -> str:
+        if self.failure_evidence:
+            return self.failure_evidence
+        phase = self.failure_phase or self.verdict()
+        return mtproxy_evidence_for_phase(phase, self.server_response_bytes)
+
     def completed_tls_frames(self) -> int:
         return max(self.tls_frames_completed, self.events["tls_frame_complete"])
 
@@ -566,6 +605,9 @@ class Attempt:
             f"profile={profile_text(self)}",
             f"phase={self.verdict()}",
         ]
+        evidence = self.evidence()
+        if evidence and evidence != "none":
+            parts.append(f"evidence={evidence}")
         if self.hello_bytes:
             parts.append(f"hello={self.hello_bytes}")
         if self.connection_type:
@@ -1190,6 +1232,58 @@ def print_layer_recommendations(attempts: list[Attempt], all_lines: list[str]) -
     )
 
 
+def stage2_status(value: bool) -> str:
+    return "seen" if value else "missing"
+
+
+def runtime_profile_exhaustion_recovered(attempts: list[Attempt], all_lines: list[str]) -> bool:
+    exhaustion_line = 0
+    exhaustion_endpoint = ""
+    for attempt in attempts:
+        if not (attempt.events["recipe_exhausted"] or attempt.events["handshake_profiles_exhausted"]):
+            continue
+        exhaustion_line = attempt.last_line
+        exhaustion_endpoint = attempt.endpoint_text()
+        break
+    if not exhaustion_line:
+        for index, line in enumerate(all_lines, start=1):
+            if "handshake_profiles_exhausted" in line:
+                exhaustion_line = index
+                exhaustion_endpoint = line_field(line, "endpoint") or endpoint_from_admission_key(line_field(line, "key"))
+                break
+    if not exhaustion_line:
+        return False
+    for attempt in attempts:
+        if attempt.first_line <= exhaustion_line:
+            continue
+        if exhaustion_endpoint and not attempt.endpoint_text().startswith(exhaustion_endpoint.split(":ee:", 1)[0]):
+            continue
+        if attempt.events["connect_start"] or attempt.events["client_hello_sent"]:
+            return True
+    return any(
+        "decision=backoff" in line and "phase=handshake_profiles_exhausted" in line
+        for line in all_lines
+    )
+
+
+def print_runtime_proof_summary(attempts: list[Attempt], all_lines: list[str]) -> None:
+    faketls = faketls_attempts(attempts)
+    proof = {
+        "source_contract_ok": "requires_source_guards",
+        "runtime_client_hello_seen": stage2_status(any(attempt.events["client_hello_sent"] for attempt in faketls)),
+        "runtime_server_hello_hmac_ok_seen": stage2_status(any(attempt.events["server_hello_hmac_ok"] for attempt in faketls)),
+        "runtime_first_tls_app_recv_seen": stage2_status(any(attempt.events["first_tls_app_recv"] for attempt in faketls)),
+        "runtime_profile_exhaustion_recovered": stage2_status(runtime_profile_exhaustion_recovered(faketls, all_lines)),
+        "runtime_post_handshake_no_appdata_seen": stage2_status(any(attempt.verdict() == "post_handshake_no_appdata" for attempt in faketls)),
+    }
+    missing = [name for name, status in proof.items() if status == "missing"]
+    print()
+    print("Stage 2 runtime proof:")
+    for name, status in proof.items():
+        print(f"  {name}={status}")
+    print(f"  missing={','.join(missing) if missing else 'none'}")
+
+
 def print_faketls_profile_summary(attempts: list[Attempt]) -> None:
     profile_verdicts: Counter[str] = Counter()
     profile_hmac_ms: defaultdict[str, list[int]] = defaultdict(list)
@@ -1415,6 +1509,7 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                 "hello_bytes",
                 "client_hello_bytes",
                 "verdict",
+                "evidence",
                 "connection_type",
                 "priority",
                 "tcp_ms",
@@ -1444,6 +1539,7 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
                     "hello_bytes": attempt.hello_bytes,
                     "client_hello_bytes": attempt.client_hello_bytes,
                     "verdict": attempt.verdict(),
+                    "evidence": attempt.evidence(),
                     "connection_type": attempt.connection_type,
                     "priority": attempt.priority,
                     "tcp_ms": attempt.timing_ms("socket_connect_start", "socket_connected"),
@@ -1774,6 +1870,7 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     all_lines = list(global_lines)
     for attempt in attempts:
         all_lines.extend(attempt.lines)
+    print_runtime_proof_summary(attempts, all_lines)
     print_layer_recommendations(attempts, all_lines)
     print_java_live_stage_summary(all_lines)
     print_proxy_control_summary(all_lines)
@@ -1794,7 +1891,9 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
         if attempt.telegram_endpoint:
             extra.append(f"telegram={attempt.telegram_endpoint}")
         suffix = f" {' '.join(extra)}" if extra else ""
-        print(f"- {attempt.key}{endpoint} profile={profile_text(attempt)} verdict={attempt.verdict()}{suffix}")
+        evidence = attempt.evidence()
+        evidence_suffix = f" evidence={evidence}" if evidence and evidence != "none" else ""
+        print(f"- {attempt.key}{endpoint} profile={profile_text(attempt)} verdict={attempt.verdict()}{evidence_suffix}{suffix}")
         print(f"  lines={attempt.first_line}-{attempt.last_line} events={flags}")
         if attempt.disconnect:
             print(f"  disconnect={attempt.disconnect}")
@@ -1841,11 +1940,20 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- dropped_after_appdata: startup worked; look at later MTProto keepalive, server close, or external throttling.")
     print("- proxy_check fail:tcp_not_connected: TCP/connect/DNS/server availability layer; compare with VPN and external probe.")
     print("- proxy_check fail:tcp_connected_no_pong: TCP opened, but MTProxy ping did not complete; can be dead proxy, server overload, or path filtering.")
+    print()
+    print("Runtime proof command:")
+    print("  /mnt/d/bin/platform-tools/adb.exe logcat -c")
+    print("  # reproduce MTProxy startup or failure on device")
+    print("  RUN_ID=$(date +%Y%m%d-%H%M%S)")
+    print("  mkdir -p mtproxy-logs-live/$RUN_ID")
+    print("  /mnt/d/bin/platform-tools/adb.exe logcat -d > mtproxy-logs-live/$RUN_ID/logcat.txt")
+    print("  python3 Tools/analyze_mtproxy_markers.py mtproxy-logs-live/$RUN_ID/logcat.txt > mtproxy-logs-live/$RUN_ID/mtproxy_analysis.txt")
+    print("  python3 Tools/verify_mtproxy_runtime_logs.py mtproxy-logs-live/$RUN_ID/logcat.txt > mtproxy-logs-live/$RUN_ID/mtproxy_runtime_contract.txt")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("markers", type=Path, help="Path to mtproxy_markers.txt")
+    parser.add_argument("markers", type=Path, help="Path to mtproxy_markers.txt or raw logcat.txt")
     parser.add_argument(
         "--out-dir",
         type=Path,

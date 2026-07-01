@@ -31,12 +31,17 @@ def main() -> int:
     adaptive_cpp = read(TGNET / "MtProxyAdaptivePolicy.cpp")
     coordinator_h = read(TGNET / "MtProxyProbeCoordinator.h")
     coordinator_cpp = read(TGNET / "MtProxyProbeCoordinator.cpp")
+    recovery_h = read(TGNET / "MtProxyRecoveryPolicy.h") if (TGNET / "MtProxyRecoveryPolicy.h").exists() else ""
+    recovery_cpp = read(TGNET / "MtProxyRecoveryPolicy.cpp") if (TGNET / "MtProxyRecoveryPolicy.cpp").exists() else ""
     socket = read(TGNET / "ConnectionSocket.cpp")
     secret_domain_cpp = read(TGNET / "MtProxySecretDomain.cpp")
+    server_flight_parser = read(TGNET / "MtProxyServerFlightParser.cpp")
+    server_flight_parser_h = read(TGNET / "MtProxyServerFlightParser.h")
     state_machine = read(TGNET / "ConnectionSocketStateMachine.h")
     options_h = read(TGNET / "MtProxyOptions.h")
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
+    reducer = read(MESSENGER / "ProxyEventReducer.java")
     check_all = read(ROOT / "Tools/check_mtproxy_all.py")
 
     for token in (
@@ -82,6 +87,19 @@ def main() -> int:
         "recipe ladder must cross product ClientHello family, SNI variant, parser variant, and gated classic variants",
         failures,
     )
+    require(
+        "MtProxyRecoveryAction" in recovery_h
+        and "mtProxyRecoveryActionForEvidence" in recovery_cpp
+        and "mtProxyRecoveryActionAdvancesRecipe" in recovery_cpp,
+        "recovery policy must be the typed owner of evidence-to-action and cursor-advance decisions",
+        failures,
+    )
+    require(
+        "serverHelloParserVariantAllowed(action)" in ladder
+        and "serverHelloParserVariantAllowed(diagnostic)" not in ladder,
+        "recipe ladder parser axis must be opened by recovery action, not by diagnostic-string matching",
+        failures,
+    )
 
     recipe_id = block(adaptive_cpp, "std::string MtProxyAdaptivePolicy::recipeId(const CompatibilityRecipe", "std::string MtProxyAdaptivePolicy::recipeId(const MtProxyRecipe")
     require(
@@ -123,7 +141,7 @@ def main() -> int:
         failures,
     )
 
-    parser = block(socket, "static MtProxyServerHelloParseResult mtProxyParseServerHelloFlight", "static int32_t normalizeMtProxyConnectionPatternMode")
+    parser = server_flight_parser
     require(
         "normalizeMtProxyServerHelloParserOption(parserMode)" in parser
         and "leading_record_wait" in parser
@@ -131,6 +149,14 @@ def main() -> int:
         and "fragmented_server_hello_wait" in parser
         and "ccs_ticket_ordering_mismatch" in parser,
         "server-flight parser must implement named parser variant diagnostics instead of ignoring parserMode",
+        failures,
+    )
+    require(
+        "struct MtProxyServerFlightParseResult" in server_flight_parser_h
+        and "mtProxyVerifyServerHelloHmac" in server_flight_parser
+        and "MtProxyServerHelloParseResult" not in socket
+        and "mtProxyVerifyServerHelloHmac" not in socket,
+        "server-flight parser result and HMAC verifier must stay extracted from ConnectionSocket",
         failures,
     )
     for token in (
@@ -151,6 +177,13 @@ def main() -> int:
         failures,
     )
     require(
+        "MtProxyAdaptivePolicy::nextCursorForRecovery" in coordinator_cpp
+        and "mtProxyRecoveryActionAdvancesRecipe" in coordinator_cpp + socket
+        and "post_handshake_no_appdata" not in block(coordinator_cpp, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe"),
+        "coordinator must advance recipe cursors only through recovery actions and keep post-handshake data-path failures out of the cursor ladder",
+        failures,
+    )
+    require(
         "return !currentSecretIsFakeTls" in socket
         and "classic_fallback_allowed" in socket,
         "classic/DD fallback variants must be gated by secret kind and never synthesized from ee",
@@ -162,13 +195,13 @@ def main() -> int:
     require(
         "return failure(KeyScope.EXACT, true, true)" in exhausted_policy
         and "terminalExactConfig" in phase_policy
-        and "terminalExactConfigVerdict" in runtime
+        and "terminalExactConfigVerdict" in runtime + reducer
         and "terminalExactFailure()" not in exhausted_policy,
         "handshake_profiles_exhausted must use normal recovery backoff/rotation hysteresis, not terminal exact config",
         failures,
     )
-    native_stage = block(runtime, "public static Decision onNativeStage", "private static boolean isActiveProxyEvent")
-    row_only_policy = block(runtime, "private static Decision updateProxyRowOnly", "private static Decision quarantineAndCancelEndpoint")
+    native_stage = block(reducer, "static ProxyRuntimeStateStore.Decision reduce", "private static boolean isActiveProxyEvent")
+    row_only_policy = block(reducer, "private static ProxyRuntimeStateStore.Decision updateProxyRowOnly", "private static ProxyRuntimeStateStore.Decision terminalExactConfigVerdict")
     require(
         "if (!isActiveProxyEvent(event))" in native_stage
         and "updateProxyRowOnly" in native_stage

@@ -4,6 +4,7 @@
  */
 
 #include "MtProxyAdaptivePolicy.h"
+#include "MtProxyServerFlightParser.h"
 
 #include <map>
 #include <openssl/rand.h>
@@ -110,26 +111,6 @@ static bool profileUsesModernExtensions(int32_t profile) {
     }
 }
 
-static const char *serverHelloParserName(int32_t parserMode) {
-    switch (normalizeMtProxyServerHelloParserOption(parserMode)) {
-        case MT_PROXY_SERVER_HELLO_PARSER_TLS_ALERT_EXACT_DESC:
-            return "tolerate_tls_alert_exact_desc";
-        case MT_PROXY_SERVER_HELLO_PARSER_FRAGMENTED_SERVER_HELLO:
-            return "tolerate_fragmented_server_hello";
-        case MT_PROXY_SERVER_HELLO_PARSER_CCS_TICKET_ORDERING:
-            return "tolerate_ccs_ticket_ordering";
-        case MT_PROXY_SERVER_HELLO_PARSER_EXTRA_RECORDS:
-            return "tolerate_extra_records_before_server_hello";
-        case MT_PROXY_SERVER_HELLO_PARSER_LENIENT_RECORD:
-            return "lenient_record_parser";
-        case MT_PROXY_SERVER_HELLO_PARSER_RESERVED:
-            return "reserved_hmac_parser";
-        case MT_PROXY_SERVER_HELLO_PARSER_STANDARD:
-        default:
-            return "standard_hmac_parser";
-    }
-}
-
 static int32_t alternateCompatibilityTlsProfile(int32_t alternateProfileIndex) {
     static const int32_t profiles[] = {
             MT_PROXY_TLS_PROFILE_FIREFOX_ANDROID,
@@ -144,12 +125,8 @@ static int32_t alternateCompatibilityTlsProfile(int32_t alternateProfileIndex) {
     return profiles[normalizedIndex];
 }
 
-static bool serverHelloParserVariantAllowed(const std::string &diagnostic) {
-    return diagnostic == "server_hello_hmac_mismatch"
-           || diagnostic == "tls_alert_after_client_hello"
-           || diagnostic == "short_tls_response_after_client_hello"
-           || diagnostic == "unrecognized_response_after_client_hello"
-           || diagnostic == "unrecognized_tls_response_after_client_hello";
+static bool serverHelloParserVariantAllowed(MtProxyRecoveryAction action) {
+    return action.kind == MtProxyRecoveryActionKind::AdvanceParserAllowed;
 }
 
 uint32_t MtProxyAdaptivePolicy::sniVariantMask(int32_t variant) {
@@ -254,12 +231,12 @@ static bool sniVariantAllowed(uint32_t mask, int32_t variant) {
     return (mask & MtProxyAdaptivePolicy::sniVariantMask(variant)) != 0;
 }
 
-static std::vector<MtProxyAdaptivePolicy::RecipeCursor> buildRecipeCursorLadder(uint32_t allowedSniVariants, bool classicFallbackAllowed, const std::string &diagnostic) {
+static std::vector<MtProxyAdaptivePolicy::RecipeCursor> buildRecipeCursorLadder(uint32_t allowedSniVariants, bool classicFallbackAllowed, MtProxyRecoveryAction action) {
     std::vector<MtProxyAdaptivePolicy::RecipeCursor> ladder;
     if (allowedSniVariants == 0) {
         allowedSniVariants = MtProxyAdaptivePolicy::sniVariantMask(MtProxyAdaptivePolicy::SNI_SANITIZED);
     }
-    int32_t parserLimit = serverHelloParserVariantAllowed(diagnostic)
+    int32_t parserLimit = serverHelloParserVariantAllowed(action)
             ? MtProxyAdaptivePolicy::PARSER_VARIANT_COUNT
             : MtProxyAdaptivePolicy::PARSER_STANDARD_HMAC + 1;
     for (int32_t sniVariant = MtProxyAdaptivePolicy::SNI_ORIGINAL; sniVariant <= MtProxyAdaptivePolicy::SNI_PUNYCODE; sniVariant++) {
@@ -301,7 +278,9 @@ static std::vector<MtProxyAdaptivePolicy::RecipeCursor> buildRecipeCursorLadder(
 }
 
 MtProxyAdaptivePolicy::RecipeCursor MtProxyAdaptivePolicy::initialCursor(uint32_t allowedSniVariants) {
-    std::vector<RecipeCursor> ladder = buildRecipeCursorLadder(allowedSniVariants, false, "");
+    MtProxyRecoveryAction action;
+    action.kind = MtProxyRecoveryActionKind::AdvanceClientHelloOnly;
+    std::vector<RecipeCursor> ladder = buildRecipeCursorLadder(allowedSniVariants, false, action);
     if (!ladder.empty()) {
         return ladder.front();
     }
@@ -310,11 +289,11 @@ MtProxyAdaptivePolicy::RecipeCursor MtProxyAdaptivePolicy::initialCursor(uint32_
     return cursor;
 }
 
-bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor, const std::string &diagnostic, uint32_t allowedSniVariants, bool classicFallbackAllowed) {
-    if (cursor == nullptr || !failureNeedsRecipe(diagnostic)) {
+bool MtProxyAdaptivePolicy::nextCursorForRecovery(RecipeCursor *cursor, MtProxyRecoveryAction action, uint32_t allowedSniVariants, bool classicFallbackAllowed) {
+    if (cursor == nullptr || !mtProxyRecoveryActionAdvancesRecipe(action)) {
         return false;
     }
-    std::vector<RecipeCursor> ladder = buildRecipeCursorLadder(allowedSniVariants, classicFallbackAllowed, diagnostic);
+    std::vector<RecipeCursor> ladder = buildRecipeCursorLadder(allowedSniVariants, classicFallbackAllowed, action);
     if (ladder.empty()) {
         return false;
     }
@@ -336,6 +315,11 @@ bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor, const std::string &
     *cursor = ladder.front();
     cursor->generation++;
     return true;
+}
+
+bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor, const std::string &diagnostic, uint32_t allowedSniVariants, bool classicFallbackAllowed) {
+    MtProxyRecoveryAction action = mtProxyRecoveryActionForPhase(diagnostic, 0);
+    return nextCursorForRecovery(cursor, action, allowedSniVariants, classicFallbackAllowed);
 }
 
 static int32_t greaseProbeTlsProfile(int32_t configuredProfile, int32_t effectiveProfile) {
@@ -519,7 +503,7 @@ MtProxyAdaptivePolicy::RecipeResult MtProxyAdaptivePolicy::applyRecipe(const Rec
         result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
         result.changed = true;
     }
-    if (serverHelloParserVariantAllowed(input.lastDiagnostic)
+    if (serverHelloParserVariantAllowed(mtProxyRecoveryActionForPhase(input.lastDiagnostic, 0))
             && input.recipeLevel >= 4
             && result.serverHelloParserMode != MT_PROXY_SERVER_HELLO_PARSER_RESERVED) {
         result.serverHelloParserMode = MT_PROXY_SERVER_HELLO_PARSER_RESERVED;
@@ -543,7 +527,7 @@ MtProxyAdaptivePolicy::MtProxyRecipe MtProxyAdaptivePolicy::recipeForResult(cons
     recipe.fragmentClientHello = result.clientHelloFragmentation != MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
     recipe.useGrease = MtProxyAdaptivePolicy::profileUsesGrease(result.effectiveTlsProfile);
     recipe.useModernExtensions = profileUsesModernExtensions(result.effectiveTlsProfile);
-    recipe.serverHelloParser = serverHelloParserName(result.serverHelloParserMode);
+    recipe.serverHelloParser = mtProxyServerHelloParserName(result.serverHelloParserMode);
     recipe.sni = result.clientHelloSni.empty() ? input.sni : result.clientHelloSni;
     return recipe;
 }
@@ -627,24 +611,19 @@ bool MtProxyAdaptivePolicy::failureNeedsRecipe(const std::string &diagnostic) {
     if (diagnostic == "tcp_not_connected") {
         return false; // ClientHello was not sent, so JA4 did not cause this failure.
     }
-    // Must stay in sync with MtProxyProbeCoordinator::failureNeedsRecipe (and the RECIPE_FAILURES
-    // contract in Tools/check_mtproxy_compatibility_recipe.py) -- this copy is what
-    // MtProxyAdaptivePolicy::nextCursor actually gates on, so a diagnostic missing here makes the
-    // coordinator's ladder walk silently no-op: completeFailure() reads hasNextCursor=false and
-    // declares the full ~150-recipe ladder exhausted after a SINGLE attempt, terminal-quarantining a
-    // proxy that was never actually tried beyond its first recipe. faketls_server_hello_wait_timeout
-    // (zero bytes back, i.e. the proxy/DPI went silent) and server_closed_after_client_hello were
-    // missing from this list, which is exactly the bug.
-    return diagnostic == "true_client_hello_timeout"
-           || diagnostic == "faketls_server_hello_wait_timeout"
-           || diagnostic == "server_closed_after_client_hello"
-           || diagnostic == "client_hello_sent_no_server_hello"
-           || diagnostic == "tls_alert_after_client_hello"
-           || diagnostic == "short_tls_response_after_client_hello"
-           || diagnostic == "unrecognized_response_after_client_hello"
-           || diagnostic == "unrecognized_tls_response_after_client_hello"
-           || diagnostic == "server_hello_hmac_mismatch"
-           || diagnostic == "post_handshake_no_appdata";
+    bool recipePhase = diagnostic == "true_client_hello_timeout"
+            || diagnostic == "faketls_server_hello_wait_timeout"
+            || diagnostic == "server_closed_after_client_hello"
+            || diagnostic == "client_hello_sent_no_server_hello"
+            || diagnostic == "tls_alert_after_client_hello"
+            || diagnostic == "short_tls_response_after_client_hello"
+            || diagnostic == "unrecognized_response_after_client_hello"
+            || diagnostic == "unrecognized_tls_response_after_client_hello"
+            || diagnostic == "server_hello_hmac_mismatch";
+    if (!recipePhase) {
+        return false;
+    }
+    return mtProxyRecoveryActionAdvancesRecipe(mtProxyRecoveryActionForPhase(diagnostic, 0));
 }
 
 int32_t MtProxyAdaptivePolicy::compatibilityTlsProfile(int32_t configuredProfile, int32_t effectiveProfile, int32_t recipeLevel) {

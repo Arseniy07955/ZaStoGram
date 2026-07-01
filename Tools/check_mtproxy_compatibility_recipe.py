@@ -15,18 +15,25 @@ PROBE_COORDINATOR_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.h"
 ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
 ADAPTIVE_POLICY_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.h"
 SECRET_DOMAIN = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.cpp"
+SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.h"
+SERVER_FLIGHT_PARSER = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.cpp"
 STATE_MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 PHASE_POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java"
 ENDPOINT_KEY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyEndpointKey.java"
 HEALTH = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyHealthStore.java"
 RUNTIME_STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java"
+VISIBLE_STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java"
 CONNECTION = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 CHECK_ALL = ROOT / "Tools/check_mtproxy_all.py"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
 NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
+HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.h"
+HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
+RECOVERY_POLICY_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.h"
+RECOVERY_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp"
 
 RECIPE_FAILURES = {
     "true_client_hello_timeout",
@@ -69,6 +76,25 @@ def block(source: str, start: str, end: str) -> str:
     return source[start_index:end_index if end_index >= 0 else len(source)]
 
 
+def method_body(source: str, signature: str) -> str:
+    start_index = source.find(signature)
+    if start_index < 0:
+        return ""
+    brace_index = source.find("{", start_index)
+    if brace_index < 0:
+        return ""
+    depth = 0
+    for index in range(brace_index, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start_index:index + 1]
+    return source[start_index:]
+
+
 def native_phase_constants(contract_h: str) -> dict[str, str]:
     return {
         value: name
@@ -91,18 +117,25 @@ def main() -> int:
     adaptive_policy = read(ADAPTIVE_POLICY)
     adaptive_policy_h = read(ADAPTIVE_POLICY_H)
     secret_domain = read(SECRET_DOMAIN)
+    server_flight_parser_h = read(SERVER_FLIGHT_PARSER_H)
+    server_flight_parser = read(SERVER_FLIGHT_PARSER)
     state_machine_h = read(STATE_MACHINE_H)
     diagnostics = read(DIAGNOSTICS)
     phase_policy = read(PHASE_POLICY)
     endpoint_key = read(ENDPOINT_KEY)
     health = read(HEALTH)
     runtime_store = read(RUNTIME_STORE)
+    visible_store = read(VISIBLE_STORE)
     connection = read(CONNECTION)
     analyzer = read(ANALYZER)
     check_all = read(CHECK_ALL)
     strings = read(STRINGS)
     strings_ru = read(STRINGS_RU)
     native_constants = native_phase_constants(read(NATIVE_PHASE_CONTRACT))
+    handshake_plan_h = read(HANDSHAKE_PLAN_H) if HANDSHAKE_PLAN_H.exists() else ""
+    handshake_plan = read(HANDSHAKE_PLAN) if HANDSHAKE_PLAN.exists() else ""
+    recovery_policy_h = read(RECOVERY_POLICY_H) if RECOVERY_POLICY_H.exists() else ""
+    recovery_policy = read(RECOVERY_POLICY) if RECOVERY_POLICY.exists() else ""
 
     for phase in RECIPE_FAILURES | {"handshake_profiles_exhausted", "secret_parse_invalid_domain_control_char", "secret_parse_invalid_domain"}:
         require(phase in java_phase_names(), f"phase contract must expose Java phase {phase}", failures)
@@ -139,7 +172,7 @@ def main() -> int:
         failures,
     )
     require(
-        "looksLikeMtProxyTlsAlert" in socket
+        "mtProxyServerFlightLooksLikeTlsAlert" in socket
         and '"tls_alert_after_client_hello"' in socket
         and '"short_tls_response_after_client_hello"' in socket
         and '"unrecognized_response_after_client_hello"' in socket
@@ -155,19 +188,53 @@ def main() -> int:
         failures,
     )
 
+    require(
+        "enum class MtProxyRecoveryActionKind" in recovery_policy_h
+        and "struct MtProxyRecoveryAction" in recovery_policy_h
+        and "MtProxyRecoveryActionKind::AdvanceClientHelloOnly" in recovery_policy
+        and "MtProxyRecoveryActionKind::AdvanceParserAllowed" in recovery_policy
+        and "MtProxyRecoveryActionKind::PostHandshakeShapingBackoff" in recovery_policy,
+        "Stage 2 recovery policy must define typed recovery actions for cursor decisions",
+        failures,
+    )
+    for evidence, action in (
+        ("PreTcpLocalWait", "IgnoreLocal"),
+        ("DnsFailure", "KeepSameRecipeBackoff"),
+        ("TcpFailure", "KeepSameRecipeBackoff"),
+        ("NoBytesAfterClientHello", "AdvanceClientHelloOnly"),
+        ("ServerBytesParserFailure", "AdvanceParserAllowed"),
+        ("ServerHelloHmacMismatch", "AdvanceParserAllowed"),
+        ("PostHandshakeNoAppData", "PostHandshakeShapingBackoff"),
+        ("ConfigInvalidSecret", "TerminalConfigFailure"),
+    ):
+        require(
+            f"MtProxyFailureEvidenceKind::{evidence}" in recovery_policy
+            and f"MtProxyRecoveryActionKind::{action}" in recovery_policy,
+            f"recovery policy must map {evidence} to {action}",
+            failures,
+        )
+    require(
+        "nextCursorForRecovery" in adaptive_policy_h
+        and "bool MtProxyAdaptivePolicy::nextCursorForRecovery" in adaptive_policy,
+        "adaptive policy must expose nextCursorForRecovery(...) as the typed cursor movement API",
+        failures,
+    )
     recipe_body = block(probe_coordinator, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe")
-    # MtProxyAdaptivePolicy::nextCursor() gates its own ladder walk on MtProxyAdaptivePolicy::failureNeedsRecipe,
-    # a second copy of the same predicate. If this copy is missing a phase that recipe_body (above) treats as a
-    # recipe failure, completeFailure() calls nextCursor(), gets hasNextCursor=false on the very first attempt,
-    # and declares the whole recipe ladder exhausted -- terminal-quarantining the proxy after one try instead of
-    # walking it. This happened in production for faketls_server_hello_wait_timeout/server_closed_after_client_hello.
     adaptive_recipe_body = block(adaptive_policy, "bool MtProxyAdaptivePolicy::failureNeedsRecipe", "int32_t MtProxyAdaptivePolicy::compatibilityTlsProfile")
+    next_cursor_body = block(adaptive_policy, "bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor", "static int32_t greaseProbeTlsProfile")
+    next_cursor_for_recovery_body = block(adaptive_policy, "bool MtProxyAdaptivePolicy::nextCursorForRecovery", "bool MtProxyAdaptivePolicy::nextCursor(RecipeCursor *cursor")
     cooldown_body = block(endpoint_policy, "bool MtProxyEndpointPolicy::failureNeedsCooldown", "int64_t MtProxyEndpointPolicy::cooldownMs")
     for phase in RECIPE_FAILURES:
         require(phase in recipe_body, f"native probe coordinator must treat {phase} as a recipe failure", failures)
-        require(phase in adaptive_recipe_body, f"native adaptive policy nextCursor() must also treat {phase} as a recipe failure, or the ladder walk silently no-ops and fake-exhausts on the first attempt", failures)
+        require(phase in adaptive_recipe_body, f"native adaptive policy compatibility wrapper must still recognize recipe phase {phase}", failures)
         if phase not in LEGACY_OR_JAVA_ONLY_RECIPE_FAILURES:
             require(not has_phase(cooldown_body, phase, native_constants), f"{phase} must not cooldown/quarantine the endpoint directly", failures)
+    require(
+        "post_handshake_no_appdata" not in recipe_body
+        and "post_handshake_no_appdata" not in adaptive_recipe_body,
+        "post_handshake_no_appdata must be PostHandshakeShapingBackoff, not a recipe cursor trigger",
+        failures,
+    )
     for phase in ("secret_parse_invalid_domain_control_char", "secret_parse_invalid_domain"):
         require(has_phase(cooldown_body, phase, native_constants), f"native endpoint policy must quarantine invalid secret phase {phase}", failures)
     require(
@@ -198,12 +265,26 @@ def main() -> int:
     )
 
     parser_variant_body = block(adaptive_policy, "static bool serverHelloParserVariantAllowed", "uint32_t MtProxyAdaptivePolicy::sniVariantMask")
+    require(
+        "MtProxyRecoveryAction action" in parser_variant_body
+        and "MtProxyRecoveryActionKind::AdvanceParserAllowed" in parser_variant_body
+        and "diagnostic" not in parser_variant_body,
+        "parser variant allowance must be recovery-action gated, not diagnostic-string gated",
+        failures,
+    )
     for phase in NO_BYTE_AFTER_CLIENT_HELLO_FAILURES:
         require(
             phase not in parser_variant_body,
             f"{phase} must keep parserVariant == PARSER_STANDARD_HMAC because no server bytes were available",
             failures,
         )
+    require(
+        "true_client_hello_timeout" not in parser_variant_body
+        and has_phase(socket, "faketls_server_hello_wait_timeout", native_constants)
+        and "server_closed_after_client_hello" in block(socket, "if (proxyAuthState == 11 && proxyHandshakeClientHelloSentTime != 0 && bytesRead == 0)", "closeSocket(1, 0);"),
+        "no-byte-after-ClientHello phases must stay isolated from parser variants",
+        failures,
+    )
     require(
         "post_handshake_no_appdata" not in parser_variant_body,
         "post_handshake_no_appdata must not be part of the ServerHello parser cross-product expansion",
@@ -212,10 +293,38 @@ def main() -> int:
 
     ladder_body = block(adaptive_policy, "static std::vector<MtProxyAdaptivePolicy::RecipeCursor> buildRecipeCursorLadder", "MtProxyAdaptivePolicy::RecipeCursor MtProxyAdaptivePolicy::initialCursor")
     require(
-        "serverHelloParserVariantAllowed(diagnostic)" in ladder_body
+        "serverHelloParserVariantAllowed(action)" in ladder_body
         and "parserLimit" in ladder_body
         and "PARSER_STANDARD_HMAC + 1" in ladder_body,
-        "cursor ladder must restrict parser variants to failures that observed server bytes",
+        "cursor ladder must restrict parser variants through recovery action evidence",
+        failures,
+    )
+    require(
+        "mtProxyRecoveryActionAdvancesRecipe(action)" in next_cursor_for_recovery_body
+        and "buildRecipeCursorLadder(allowedSniVariants, classicFallbackAllowed, action)" in next_cursor_for_recovery_body
+        and "MtProxyRecoveryAction action = mtProxyRecoveryActionForPhase(diagnostic, 0)" in next_cursor_body,
+        "nextCursor must be a compatibility wrapper around nextCursorForRecovery and recovery action gating",
+        failures,
+    )
+    require(
+        "MtProxyAdaptivePolicy::nextCursorForRecovery" in probe_coordinator
+        and "MtProxyAdaptivePolicy::nextCursor(&nextCursor, diagnostic" not in probe_coordinator,
+        "probe coordinator must move recipe cursors through typed recovery actions",
+        failures,
+    )
+    require(
+        "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in socket,
+        "ConnectionSocket must use recovery action before entering the recipe-failure path",
+        failures,
+    )
+    require(
+        "struct MtProxyServerFlightParseResult" in server_flight_parser_h
+        and "mtProxyParseServerHelloFlight" in server_flight_parser
+        and "mtProxyVerifyServerHelloHmac" in server_flight_parser
+        and "MtProxyServerHelloParseResult" not in socket
+        and "mtProxyVerifyServerHelloHmac" not in socket
+        and "MtProxyServerFlightParseResult parseResult = mtProxyParseServerHelloFlight" in socket,
+        "server-flight parsing and HMAC verification must live in MtProxyServerFlightParser, not ConnectionSocket",
         failures,
     )
 
@@ -225,6 +334,30 @@ def main() -> int:
         and "nextCursor" in adaptive_policy_h
         and "recipeForCursor" in adaptive_policy_h,
         "compatibility ladder must expose explicit cursor and recipe descriptor APIs instead of a fixed level count",
+        failures,
+    )
+    client_hello_prepare_block = block(socket, "if (proxyAuthState == 10)", "if (proxyAuthState == 11 && pendingClientHello != nullptr)")
+    require(
+        "struct MtProxyHandshakePlan" in handshake_plan_h
+        and "MtProxyAdaptivePolicy::RecipeCursor cursor" in handshake_plan_h
+        and "MtProxyAdaptivePolicy::CompatibilityRecipe recipe" in handshake_plan_h
+        and "std::string recipeId" in handshake_plan_h
+        and "mtProxyBuildHandshakePlan" in handshake_plan,
+        "Stage 2 must introduce an immutable MtProxyHandshakePlan selected once per FakeTLS attempt",
+        failures,
+    )
+    require(
+        "applyMtProxyPhaseAdaptiveRecipe();" not in client_hello_prepare_block
+        and "recipeCursorForProbe(currentMtProxyProbeKey)" not in client_hello_prepare_block
+        and "readGreaseProbeState(currentMtProxyProbeKey)" not in client_hello_prepare_block,
+        "ClientHello send path must use the selected immutable handshake plan instead of recalculating recipe/coordinator state",
+        failures,
+    )
+    require(
+        "currentRecipeFamily =" not in block(socket, "markProxyHandshakeClientHelloSent();", "void ConnectionSocket::writeBuffer")
+        and "currentRecipeSniVariant =" not in block(socket, "markProxyHandshakeClientHelloSent();", "void ConnectionSocket::writeBuffer")
+        and "currentRecipeParserVariant =" not in block(socket, "markProxyHandshakeClientHelloSent();", "void ConnectionSocket::writeBuffer"),
+        "recipe cursor fields must not mutate after client_hello_sent for the same attempt",
         failures,
     )
     require(
@@ -318,7 +451,8 @@ def main() -> int:
         failures,
     )
     require(
-        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in block(phase_policy, "public static boolean isOneShotTerminal", "public static boolean shouldAccelerateProxyRotation")
+        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in method_body(phase_policy, "public static boolean isOneShotTerminal")
+        and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in method_body(phase_policy, "private static boolean isTerminalExactConfigPhase")
         and "terminalExactFailure()" not in block(recipe_phases, "HANDSHAKE_PROFILES_EXHAUSTED", "MTPROXY_PACKET_SENT_NO_RESPONSE"),
         "handshake_profiles_exhausted must not become terminalExactConfig or isOneShotTerminal in Java",
         failures,
@@ -344,7 +478,7 @@ def main() -> int:
         failures,
     )
     invalid_secret_policy = block(
-        phase_policy,
+        recipe_phases,
         "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:",
         "case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:",
     )
@@ -356,8 +490,10 @@ def main() -> int:
         failures,
     )
     require(
-        "ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)" in block(runtime_store, "public static void markConnectionUsable", "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
-        and "source=usable_success" in runtime_store,
+        "ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)" in block(visible_store, "static boolean markConnectionUsable", "private static void promotePendingDnsVisiblePhase")
+        and "if (!ProxyVisibleStateStore.markConnectionUsable(proxyInfo, normalized, now))" in block(runtime_store, "public static void markConnectionUsable", "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
+        and "ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now)" in block(runtime_store, "public static void markConnectionUsable", "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
+        and "source=usable_success" in visible_store,
         "late usable-success callbacks from a rotated-away endpoint must not clear quarantine/backoff",
         failures,
     )

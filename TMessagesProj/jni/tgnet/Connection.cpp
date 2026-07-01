@@ -20,6 +20,7 @@
 #include "Datacenter.h"
 #include "NativeByteBuffer.h"
 #include "ByteArray.h"
+#include "MtProxyHandshakeScheduler.h"
 #include "MtProxyPhaseContract.h"
 
 thread_local static uint32_t lastConnectionToken = 1;
@@ -38,23 +39,23 @@ static bool verboseNetworkDebugEnabled() {
 }
 }
 
-static int32_t mtProxyHandshakePriorityForConnectionType(ConnectionType type) {
+static MtProxyRequestClass mtProxyRequestClassForConnectionType(ConnectionType type) {
     switch ((int32_t) type & 0x0000ffff) {
         case ConnectionTypeGeneric:
         case ConnectionTypeTemp:
-            return 0;
+            return MtProxyRequestClass::Generic;
         case ConnectionTypeGenericMedia:
-            return 1;
+            return MtProxyRequestClass::Media;
         case ConnectionTypePush:
-            return 2;
+            return MtProxyRequestClass::Push;
         case ConnectionTypeDownload:
-            return 3;
+            return MtProxyRequestClass::Download;
         case ConnectionTypeUpload:
-            return 4;
+            return MtProxyRequestClass::Upload;
         case ConnectionTypeProxy:
-            return -1;
+            return MtProxyRequestClass::ProxyCheck;
         default:
-            return 5;
+            return MtProxyRequestClass::ProxyCheck;
     }
 }
 
@@ -490,7 +491,11 @@ void Connection::connect() {
     lastPacketLength = 0;
     wasConnected = false;
     hasSomeDataSinceLastConnect = false;
-    setMtProxyHandshakePriority(mtProxyHandshakePriorityForConnectionType(connectionType));
+    int32_t mtProxyHandshakePriority = mtProxyHandshakePriorityForRequestClass(mtProxyRequestClassForConnectionType(connectionType));
+    if (((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy) {
+        mtProxyHandshakePriority = MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
+    }
+    setMtProxyHandshakePriority(mtProxyHandshakePriority);
     openConnection(hostAddress, hostPort, secret, ipv6 != 0, ConnectionsManager::getInstance(currentDatacenter->instanceNum).currentNetworkType, currentDatacenter->getDatacenterId(), isMediaConnection);
     if (connectionType == ConnectionTypeProxy) {
         setTimeout(5);

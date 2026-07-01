@@ -207,11 +207,19 @@ def main():
     require(
         "PRE_USABLE_MEDIA_LIMIT = 1" in warmup
         and "PRE_USABLE_PREFETCH_LIMIT = 0" in warmup
+        and "ESTABLISHED_THROUGHPUT_CLASSES" in warmup
         and "USABLE_RAMP_STEP_MS = 400" in warmup
         and "USABLE_RAMP_INITIAL_LIMIT = 2" in warmup
         and "USABLE_RAMP_SECOND_LIMIT = 4" in warmup
         and "USABLE_RAMP_STABLE_MS = 5000" in warmup,
         "ProxyWarmupGate must encode the requested pre-usable and post-usable ramp limits",
+        failures,
+    )
+    require(
+        "isEstablishedThroughputClass" in warmup
+        and "currentState == ProxyWarmupState.USABLE" in warmup
+        and "return normalLimit;" in warmup,
+        "established media/download/upload throughput must bypass startup fanout caps after usable success",
         failures,
     )
     require(

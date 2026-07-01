@@ -10,6 +10,10 @@ VERIFIER = ROOT / "Tools/verify_mtproxy_runtime_logs.py"
 COLLECTOR = ROOT / "Tools/collect_mtproxy_logs.ps1"
 README = ROOT / "README.md"
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
+SOCKET_HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+PUBLISHER_HEADER = ROOT / "TMessagesProj/jni/tgnet/MtProxySocketPublisher.h"
+PUBLISHER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxySocketPublisher.cpp"
+CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
 
 def require(condition: bool, message: str) -> None:
@@ -39,6 +43,66 @@ def main() -> int:
     collector = COLLECTOR.read_text(encoding="utf-8", errors="replace")
     readme = README.read_text(encoding="utf-8", errors="replace")
     socket = SOCKET.read_text(encoding="utf-8", errors="replace")
+    socket_header = SOCKET_HEADER.read_text(encoding="utf-8", errors="replace")
+    publisher_header = PUBLISHER_HEADER.read_text(encoding="utf-8", errors="replace")
+    publisher_cpp = PUBLISHER_CPP.read_text(encoding="utf-8", errors="replace")
+    cmake = CMAKE.read_text(encoding="utf-8", errors="replace")
+    verifier = VERIFIER.read_text(encoding="utf-8", errors="replace")
+    require(
+        "tgnet/MtProxySocketPublisher.cpp" in cmake,
+        "CMake must compile the native MTProxy socket publisher facade",
+    )
+    require(
+        "struct MtProxySocketObservation" in publisher_header
+        and "const char *phase = MtProxyPhase::ConnectionNotStarted;" in publisher_header
+        and 'const char *reason = "unknown";' in publisher_header
+        and "std::string endpointKey;" in publisher_header
+        and "std::string probeKey;" in publisher_header
+        and "std::string networkEndpointKey;" in publisher_header
+        and "bool publishVisibleStage = true;" in publisher_header
+        and "bool recordEndpointFailure = false;" in publisher_header,
+        "native publisher facade must expose typed observation fields",
+    )
+    require(
+        "mtProxyPublishSocketObservation" in publisher_cpp
+        and "callbacks.publishVisibleStage(normalized)" in publisher_cpp
+        and "callbacks.recordEndpointFailure(normalized)" in publisher_cpp
+        and "mtProxySocketObservationIsHighRiskPhase" in publisher_cpp,
+        "native publisher facade must route normalized observations through publish/failure callbacks",
+    )
+    publisher_phase_tokens = {
+        "recipe_failed": '"recipe_failed"',
+        "handshake_profiles_exhausted": "MtProxyPhase::HandshakeProfilesExhausted",
+        "secret_parse_invalid_domain_control_char": "MtProxyPhase::SecretParseInvalidDomainControlChar",
+        "secret_parse_invalid_domain": "MtProxyPhase::SecretParseInvalidDomain",
+        "dns_blocked_zero_address": "MtProxyPhase::DnsBlockedZeroAddress",
+        "post_handshake_no_appdata": "MtProxyPhase::PostHandshakeNoAppdata",
+        "first_tls_app_recv": "MtProxyPhase::FirstTlsAppRecv",
+        "first_mtproxy_packet_recv": "MtProxyPhase::FirstMtproxyPacketRecv",
+    }
+    for phase, publisher_token in publisher_phase_tokens.items():
+        require(
+            publisher_token in publisher_cpp and phase in verifier,
+            f"publisher facade and runtime verifier must preserve {phase}",
+        )
+    require(
+        '#include "MtProxySocketPublisher.h"' in socket
+        and "void publishMtProxySocketObservation(const MtProxySocketObservation &observation)" in socket_header
+        and "void ConnectionSocket::publishMtProxySocketObservation" in socket
+        and "publishProxyConnectionStage(publishedObservation.phase)" in socket
+        and "recordMtProxyEndpointFailure(publishedObservation.phase, publishedObservation.reason)" in socket,
+        "ConnectionSocket must bridge publisher observations to the existing visible-stage and endpoint-failure paths",
+    )
+    require(
+        'recipeFailureObservation.phase = "recipe_failed"' in socket
+        and "exhaustedObservation.phase = MtProxyPhase::HandshakeProfilesExhausted" in socket
+        and "observation.phase = MtProxyPhase::DnsBlockedZeroAddress" in socket
+        and "observation.phase = MtProxyPhase::PostHandshakeNoAppdata" in socket
+        and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in socket
+        and "observation.phase = MtProxyPhase::FirstMtproxyPacketRecv" in socket
+        and "mtProxySocketObservationIsHighRiskPhase(terminalDiagnostic.c_str())" in socket,
+        "high-risk native publish paths must use MtProxySocketObservation without rewriting every stage",
+    )
     require(
         "mtproxy_transport" in collector
         and "transport_state" in collector

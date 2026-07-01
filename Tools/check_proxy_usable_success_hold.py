@@ -285,6 +285,8 @@ def run_runtime_log_visible_hold_check(failures: list[str]) -> None:
 def main() -> int:
     failures: list[str] = []
     store = read(MESSENGER / "ProxyRuntimeStateStore.java")
+    reducer = read(MESSENGER / "ProxyEventReducer.java")
+    visible = read(MESSENGER / "ProxyVisibleStateStore.java")
     health = read(MESSENGER / "ProxyHealthStore.java")
     rotation = read(MESSENGER / "ProxyRotationController.java")
     engine = read(MESSENGER / "ProxyRotationEngine.java")
@@ -297,20 +299,25 @@ def main() -> int:
     require("public static boolean hasFreshUsableSuccess" in store, "runtime store must expose fresh usable-success state", failures)
     require("public static long usableSuccessRemainingMs" in store, "runtime store must expose remaining usable-success hold", failures)
     require("static long usableSuccessRemainingMs" in health, "health store must expose usable-success remaining time", failures)
+    require(
+        "return ProxyEventReducer.reduce(event)" in method_body(store, "public static Decision onNativeStage"),
+        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        failures,
+    )
 
-    native_stage = method_body(store, "public static Decision onNativeStage")
-    helper = method_body(store, "private static boolean shouldHoldLivePhaseByUsableSuccess")
+    native_stage = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
+    helper = method_body(visible, "static boolean shouldHoldLivePhaseByUsableSuccess")
     live_hold_idx = native_stage.find("decision=held_live_by_usable_success")
     connected_hold_idx = native_stage.find("decision=held_live_by_current_proxy_usable")
     visible_write_idx = native_stage.find("if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))")
-    helper_call_idx = native_stage.find("shouldHoldLivePhaseByUsableSuccess(currentProxy, event)")
+    helper_call_idx = native_stage.find("ProxyVisibleStateStore.shouldHoldLivePhaseByUsableSuccess(currentProxy, event)")
     require(
         helper
         and "String phase = ProxyCheckDiagnostics.normalize(event.phase)" in helper
         and "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, event.timestamp)" in helper
         and "ProxyPhasePolicy.isLivePhase(phase)" in helper
         and "ProxyPhasePolicy.isProxyUsableSuccessPhase(phase)" in helper,
-        "runtime store must keep usable-success live telemetry hold in a dedicated shouldHoldLivePhaseByUsableSuccess helper",
+        "visible state store must keep usable-success live telemetry hold in a dedicated shouldHoldLivePhaseByUsableSuccess helper",
         failures,
     )
     require(
@@ -319,28 +326,28 @@ def main() -> int:
         and helper_call_idx >= 0
         and helper_call_idx < visible_write_idx
         and live_hold_idx < visible_write_idx
-        and 'return new Decision("held_live_by_usable_success"' in native_stage,
+        and 'return new ProxyRuntimeStateStore.Decision("held_live_by_usable_success"' in native_stage,
         "fresh usable success must hold later live pre-TCP native stages before they can overwrite visible state",
         failures,
     )
-    shadow_failure_idx = native_stage.find("shouldShadowFailureByUsableSuccess(currentProxy, event)")
+    shadow_failure_idx = native_stage.find("ProxyVisibleStateStore.shouldShadowFailureByUsableSuccess(currentProxy, event)")
     shadow_decision_idx = native_stage.find("decision=shadowed_by_usable_success")
     require(
-        "private static boolean shouldShadowFailureByUsableSuccess" in store
+        "static boolean shouldShadowFailureByUsableSuccess" in visible
         and shadow_failure_idx >= 0
         and shadow_decision_idx >= 0
         and visible_write_idx >= 0
         and shadow_failure_idx < visible_write_idx
         and shadow_decision_idx < visible_write_idx
-        and 'return new Decision("shadowed_by_usable_success"' in native_stage,
+        and 'return new ProxyRuntimeStateStore.Decision("shadowed_by_usable_success"' in native_stage,
         "fresh usable success must shadow later failure phases before any visible write",
         failures,
     )
     require(
         "static String lastUsablePhase" in health
         and "ProxyPhasePolicy.isProxyUsableSuccessPhase" in health
-        and "ProxyHealthStore.lastUsablePhase" in store
-        and "private static String heldByUsablePhase" in store,
+        and "ProxyHealthStore.lastUsablePhase" in visible
+        and "static String heldByUsablePhase" in visible,
         "usable-success holds must anchor held_by to ProxyHealthStore.lastUsablePhase instead of the mutable visible diagnostic",
         failures,
     )
@@ -372,12 +379,13 @@ def main() -> int:
         "public static boolean isCurrentProxyUsable" in store
         and connected_hold_idx >= 0
         and connected_hold_idx < visible_write_idx
-        and "isCurrentProxyUsable(currentProxy, event.timestamp)" in native_stage
-        and 'return new Decision("held_live_by_current_proxy_usable"' in native_stage,
+        and "ProxyVisibleStateStore.isCurrentProxyUsable(currentProxy, event.timestamp)" in native_stage
+        and 'return new ProxyRuntimeStateStore.Decision("held_live_by_current_proxy_usable"' in native_stage,
         "selected-account connected/updating current proxy must hold later live socket telemetry before visible writes",
         failures,
     )
-    mark_start = method_body(store, "public static void markConnectionStarting")
+    mark_start = method_body(visible, "static void markConnectionStarting")
+    runtime_mark_start = method_body(store, "public static void markConnectionStarting")
     connect_start_hold_idx = mark_start.find("decision=held_live_by_usable_success")
     current_proxy_hold_idx = mark_start.find("decision=held_live_by_current_proxy_usable")
     clear_hold_idx = mark_start.find("ProxyHealthStore.clearUsableSuccessHold(proxyInfo)")
@@ -389,6 +397,11 @@ def main() -> int:
         and "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)" in mark_start
         and "return;" in mark_start[connect_start_hold_idx:mark_visible_idx],
         "Java connect_start must be held by fresh usable success before it can overwrite visible state",
+        failures,
+    )
+    require(
+        "ProxyVisibleStateStore.markConnectionStarting(proxyInfo" in runtime_mark_start,
+        "ProxyRuntimeStateStore.markConnectionStarting must delegate visible writes to ProxyVisibleStateStore",
         failures,
     )
     require(
@@ -404,8 +417,8 @@ def main() -> int:
         failures,
     )
     require(
-        "held_connect_start_by_usable_success" not in store
-        and "held_connect_start_by_current_proxy_usable" not in store,
+        "held_connect_start_by_usable_success" not in store + visible
+        and "held_connect_start_by_current_proxy_usable" not in store + visible,
         "Java connect_start hold decisions must use the shared held_live_by_* taxonomy",
         failures,
     )

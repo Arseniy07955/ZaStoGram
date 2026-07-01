@@ -47,6 +47,12 @@ public final class ProxyWarmupGate {
     private static final int USABLE_RAMP_STABLE_MS = 5000;
     private static final int PRE_USABLE_PREFETCH_DELAY_MS = 1500;
     private static final long WARMUP_DECISION_LOG_DEDUP_MS = 1000L;
+    private static final NetworkRequestClass[] ESTABLISHED_THROUGHPUT_CLASSES = {
+            NetworkRequestClass.MEDIA_VISIBLE,
+            NetworkRequestClass.MEDIA_PREFETCH,
+            NetworkRequestClass.STORIES_PREFETCH,
+            NetworkRequestClass.STICKER_PREFETCH
+    };
     private static final String DECISION_ALLOW = "decision=allow";
     private static final String DECISION_DELAY = "decision=delay";
     private static final String DECISION_RAMP = "decision=ramp";
@@ -255,6 +261,9 @@ public final class ProxyWarmupGate {
         }
         long now = SystemClock.elapsedRealtime();
         ProxyWarmupState currentState = currentStateLocked(now);
+        if (currentState == ProxyWarmupState.USABLE && isEstablishedThroughputClass(requestClass) && !isRampLimitedLocked(now)) {
+            return normalLimit;
+        }
         if (currentState != ProxyWarmupState.USABLE) {
             int limit = isBlockedBeforeUsable(requestClass) ? PRE_USABLE_PREFETCH_LIMIT : PRE_USABLE_MEDIA_LIMIT;
             if (limit <= 0) {
@@ -335,6 +344,15 @@ public final class ProxyWarmupGate {
             default:
                 return false;
         }
+    }
+
+    private static boolean isEstablishedThroughputClass(NetworkRequestClass requestClass) {
+        for (int i = 0; i < ESTABLISHED_THROUGHPUT_CLASSES.length; i++) {
+            if (ESTABLISHED_THROUGHPUT_CLASSES[i] == requestClass) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static NetworkRequestClass normalizeClass(NetworkRequestClass requestClass) {

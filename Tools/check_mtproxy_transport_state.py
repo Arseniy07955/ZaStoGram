@@ -205,12 +205,14 @@ def main() -> int:
         failures,
     )
 
+    tls_app_start = socket.find("observation.phase = MtProxyPhase::FirstTlsAppRecv")
     tls_app_body = socket[
-        socket.find('publishProxyConnectionStage("first_tls_app_recv")'):
-        socket.find('onReceivedData(tlsBuffer)', socket.find('publishProxyConnectionStage("first_tls_app_recv")'))
+        tls_app_start:
+        socket.find('onReceivedData(tlsBuffer)', tls_app_start)
     ]
     require(
-        'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in tls_app_body,
+        "publishMtProxySocketObservation(observation)" in tls_app_body
+        and 'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in tls_app_body,
         "first_tls_app_recv must record data-path success",
         failures,
     )
@@ -220,14 +222,16 @@ def main() -> int:
         failures,
     )
 
+    plain_success_start = socket.find("observation.phase = MtProxyPhase::FirstMtproxyPacketRecv")
     plain_success_body = socket[
-        socket.find('publishProxyConnectionStage("first_mtproxy_packet_recv")'):
-        socket.find("void ConnectionSocket::rotateMtProxyTlsProfileOnFailureIfNeeded", socket.find('publishProxyConnectionStage("first_mtproxy_packet_recv")'))
+        plain_success_start:
+        socket.find("void ConnectionSocket::rotateMtProxyTlsProfileOnFailureIfNeeded", plain_success_start)
     ]
     first_plain_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s"'
     first_plain_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")'
     require(
-        first_plain_recv_success in plain_success_body,
+        "publishMtProxySocketObservation(observation)" in plain_success_body
+        and first_plain_recv_success in plain_success_body,
         "first_mtproxy_packet_recv must record data-path success",
         failures,
     )
@@ -505,7 +509,9 @@ def main() -> int:
         'strcmp(reason, "tcp_connect_gate_wait") == 0' in admission_release_body
         and "isNeutralSchedulerWaitRelease" in admission_release_body
         and "shouldApplyTcpFailureCooldown = wasActive && !isNeutralSchedulerWaitRelease && startupTimeline.tcpConnectAttemptStarted()" in admission_release_body
-        and "else if (!succeeded && wasActive && !isNeutralSchedulerWaitRelease && mtProxyConnectionPatternUsesCooldown(connectionPatternMode))" in admission_release_body,
+        and "releaseRequest.neutralSchedulerWaitRelease = isNeutralSchedulerWaitRelease" in admission_release_body
+        and "releaseRequest.shouldApplyTcpFailureCooldown = shouldApplyTcpFailureCooldown" in admission_release_body
+        and "mtProxyHandshakeSchedulerRelease(releaseRequest)" in admission_release_body,
         "releaseProxyHandshakeAdmission must treat tcp_connect_gate_wait as a neutral scheduler release with no failure cooldown",
         failures,
     )

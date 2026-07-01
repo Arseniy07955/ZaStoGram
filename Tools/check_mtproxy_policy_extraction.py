@@ -11,6 +11,8 @@ ENDPOINT_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.h"
 ENDPOINT_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
 ADAPTIVE_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.h"
 ADAPTIVE_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
+HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.h"
+HANDSHAKE_PLAN_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
 
@@ -31,15 +33,20 @@ def main() -> int:
     endpoint_cpp = read(ENDPOINT_CPP)
     adaptive_h = read(ADAPTIVE_H)
     adaptive_cpp = read(ADAPTIVE_CPP)
+    handshake_plan_h = read(HANDSHAKE_PLAN_H)
+    handshake_plan_cpp = read(HANDSHAKE_PLAN_CPP)
     cmake = read(CMAKE)
     endpoint = endpoint_h + "\n" + endpoint_cpp
     adaptive = adaptive_h + "\n" + adaptive_cpp
+    handshake_plan = handshake_plan_h + "\n" + handshake_plan_cpp
 
     for path, label in (
         (ENDPOINT_H, "MtProxyEndpointPolicy.h"),
         (ENDPOINT_CPP, "MtProxyEndpointPolicy.cpp"),
         (ADAPTIVE_H, "MtProxyAdaptivePolicy.h"),
         (ADAPTIVE_CPP, "MtProxyAdaptivePolicy.cpp"),
+        (HANDSHAKE_PLAN_H, "MtProxyHandshakePlan.h"),
+        (HANDSHAKE_PLAN_CPP, "MtProxyHandshakePlan.cpp"),
     ):
         require(path.exists(), f"{label} must exist", failures)
         require(f"tgnet/{label.replace('.h', '.cpp')}" in cmake or label.endswith(".h"), f"{label} implementation must be compiled by tgnet CMake target", failures)
@@ -70,6 +77,13 @@ def main() -> int:
         "tlsAutoRotateProfiles",
     ):
         require(symbol in adaptive, f"adaptive policy must define {symbol}", failures)
+    for symbol in (
+        "struct MtProxyHandshakePlan",
+        "mtProxyBuildHandshakePlan",
+        "MtProxyAdaptivePolicy::recipeForCursor",
+        "MtProxyAdaptivePolicy::recipeId",
+    ):
+        require(symbol in handshake_plan, f"handshake plan policy must define/use {symbol}", failures)
 
     forbidden_socket_symbols = (
         "struct MtProxyEndpointResilienceState",
@@ -93,7 +107,7 @@ def main() -> int:
         "MtProxyEndpointPolicy::recordDataPathSuccess",
         "MtProxyEndpointPolicy::useCachedHostAddress",
         "MtProxyEndpointPolicy::storeResolvedAddress",
-        "MtProxyAdaptivePolicy::applyRecipe",
+        "mtProxyBuildHandshakePlan",
         "MtProxyAdaptivePolicy::resolveEffectiveTlsProfile",
         "MtProxyAdaptivePolicy::rotateTlsProfileOnFailureIfNeeded",
     ):

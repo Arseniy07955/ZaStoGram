@@ -14,6 +14,7 @@ MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
+SHAPER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
 PROXY_CHECK = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
@@ -38,6 +39,7 @@ def main() -> None:
     manager_h = text(MANAGER_H)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    shaper_cpp = text(SHAPER_CPP)
     socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     proxy_check = text(PROXY_CHECK)
 
@@ -103,7 +105,9 @@ def main() -> None:
         "Startup Cover must start only after ServerHello/HMAC succeeds",
     )
     require(
-        "if (!currentSecretIsFakeTls || currentStartupCoverMode == MT_PROXY_STARTUP_COVER_OFF)" in socket_cpp,
+        "mtProxyStartupCoverPolicy(currentSecretIsFakeTls, currentStartupCoverMode)" in socket_cpp
+        and "policy.enabled" in socket_cpp
+        and "!fakeTls || policy.mode == MT_PROXY_STARTUP_COVER_OFF" in shaper_cpp,
         "Startup Cover must be gated to FakeTLS and be fully off when disabled",
     )
     for path in (STRINGS, STRINGS_RU):

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
 STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java"
+VISIBLE_STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java"
 HEALTH = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyHealthStore.java"
 STATUS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyStatusMirror.java"
 ENDPOINT_KEY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyEndpointKey.java"
@@ -127,6 +128,7 @@ if failed:
 
 scheduler_text = SCHEDULER.read_text(encoding="utf-8")
 store_text = STORE.read_text(encoding="utf-8")
+visible_text = VISIBLE_STORE.read_text(encoding="utf-8")
 health_text = HEALTH.read_text(encoding="utf-8")
 status_text = STATUS.read_text(encoding="utf-8")
 endpoint_key_text = ENDPOINT_KEY.read_text(encoding="utf-8")
@@ -149,14 +151,19 @@ if "long appliedTime = ProxyRuntimeStateStore.appliedTimeForProxyCheck(request.c
 mark_connected_start = store_text.find("public static void markConnected")
 mark_connected_end = store_text.find("public static void markConnectionStarting", mark_connected_start)
 mark_connected_body = store_text[mark_connected_start:mark_connected_end]
+visible_mark_connected_start = visible_text.find("static boolean markConnected")
+visible_mark_connected_end = visible_text.find("static void markConnectionStarting", visible_mark_connected_start)
+visible_mark_connected_body = visible_text[visible_mark_connected_start:visible_mark_connected_end]
 if (
-    "boolean preserveFreshProxyPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now);" not in mark_connected_body
-    or "if (!preserveFreshProxyPhase)" not in mark_connected_body
-    or mark_connected_body.find("if (!preserveFreshProxyPhase)") > mark_connected_body.find("ProxyStatusMirror.markConnected(proxyInfo, now)")
-    or mark_connected_body.find("if (!preserveFreshProxyPhase)") > mark_connected_body.find("ProxyHealthStore.rememberConnected(proxyInfo, now)")
+    "boolean preserveFreshProxyPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo) || ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now);" not in visible_mark_connected_body
+    or "if (!preserveFreshProxyPhase)" not in visible_mark_connected_body
+    or visible_mark_connected_body.find("if (!preserveFreshProxyPhase)") > visible_mark_connected_body.find("ProxyStatusMirror.markConnected(proxyInfo, now)")
+    or "return !preserveFreshProxyPhase;" not in visible_mark_connected_body
+    or "if (ProxyVisibleStateStore.markConnected(proxyInfo, now))" not in mark_connected_body
+    or "ProxyHealthStore.rememberConnected(proxyInfo, now);" not in mark_connected_body
 ):
     print("Proxy check scheduler guard failed:")
-    print(f" - {STORE.relative_to(ROOT)}: generic connected-state observations must preserve fresh terminal failure or usable success phases")
+    print(f" - {STORE.relative_to(ROOT)} / {VISIBLE_STORE.relative_to(ROOT)}: generic connected-state observations must preserve fresh terminal failure or usable success phases")
     sys.exit(1)
 status_mark_connected_start = status_text.find("static void markConnected")
 status_mark_connected_end = status_text.find("static void markConnectionStarting", status_mark_connected_start)
@@ -168,15 +175,19 @@ if "availableCheckTime = now" in status_mark_connected_body:
 mark_starting_start = store_text.find("public static void markConnectionStarting")
 mark_starting_end = store_text.find("public static void markConnectionUsable", mark_starting_start)
 mark_starting_body = store_text[mark_starting_start:mark_starting_end]
+visible_mark_starting_start = visible_text.find("static void markConnectionStarting")
+visible_mark_starting_end = visible_text.find("static boolean markConnectionUsable", visible_mark_starting_start)
+visible_mark_starting_body = visible_text[visible_mark_starting_start:visible_mark_starting_end]
 if (
-    "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)" not in mark_starting_body
-    or "decision=held_live_by_usable_success" not in mark_starting_body
-    or "ProxyStatusMirror.markConnectionStarting(proxyInfo, now);" not in mark_starting_body
-    or mark_starting_body.find("decision=held_live_by_usable_success") > mark_starting_body.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now);")
-    or "ProxyHealthStore.clearUsableSuccessHold(proxyInfo);" in mark_starting_body
+    "ProxyVisibleStateStore.markConnectionStarting(proxyInfo" not in mark_starting_body
+    or "ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)" not in visible_mark_starting_body
+    or "decision=held_live_by_usable_success" not in visible_mark_starting_body
+    or "ProxyStatusMirror.markConnectionStarting(proxyInfo, now);" not in visible_mark_starting_body
+    or visible_mark_starting_body.find("decision=held_live_by_usable_success") > visible_mark_starting_body.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now);")
+    or "ProxyHealthStore.clearUsableSuccessHold(proxyInfo);" in visible_mark_starting_body
 ):
     print("Proxy check scheduler guard failed:")
-    print(f" - {STORE.relative_to(ROOT)}: explicit current-proxy reconnect attempts must hold fresh usable success before publishing visible connect_start")
+    print(f" - {STORE.relative_to(ROOT)} / {VISIBLE_STORE.relative_to(ROOT)}: explicit current-proxy reconnect attempts must hold fresh usable success before publishing visible connect_start")
     sys.exit(1)
 if "finish result=\" + (effectiveTime == -1" in scheduler_text or "onProxyChecked(listener.proxyInfo, effectiveTime)" in scheduler_text:
     print("Proxy check scheduler guard failed:")

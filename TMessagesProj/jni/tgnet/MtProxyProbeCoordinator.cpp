@@ -5,6 +5,9 @@
 
 #include "MtProxyProbeCoordinator.h"
 
+#include "MtProxyFailureEvidence.h"
+#include "MtProxyRecoveryPolicy.h"
+
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -203,8 +206,9 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
         state.greaseRejected = true;
     }
 
+    MtProxyRecoveryAction recoveryAction = mtProxyRecoveryActionForPhase(diagnostic, 0);
     MtProxyAdaptivePolicy::RecipeCursor nextCursor = state.cursor;
-    bool hasNextCursor = MtProxyAdaptivePolicy::nextCursor(&nextCursor, diagnostic, state.allowedSniVariants, classicFallbackAllowed);
+    bool hasNextCursor = MtProxyAdaptivePolicy::nextCursorForRecovery(&nextCursor, recoveryAction, state.allowedSniVariants, classicFallbackAllowed);
     if (hasNextCursor) {
         state.cursor = nextCursor;
     } else {
@@ -381,16 +385,20 @@ bool MtProxyProbeCoordinator::failureNeedsRecipe(const std::string &diagnostic) 
     if (diagnostic == "tcp_not_connected") {
         return false;
     }
-    return diagnostic == "true_client_hello_timeout"
-           || diagnostic == "faketls_server_hello_wait_timeout"
-           || diagnostic == "server_closed_after_client_hello"
-           || diagnostic == "client_hello_sent_no_server_hello"
-           || diagnostic == "tls_alert_after_client_hello"
-           || diagnostic == "short_tls_response_after_client_hello"
-           || diagnostic == "unrecognized_response_after_client_hello"
-           || diagnostic == "unrecognized_tls_response_after_client_hello"
-           || diagnostic == "server_hello_hmac_mismatch"
-           || diagnostic == "post_handshake_no_appdata";
+    bool recipePhase = diagnostic == "true_client_hello_timeout"
+            || diagnostic == "faketls_server_hello_wait_timeout"
+            || diagnostic == "server_closed_after_client_hello"
+            || diagnostic == "client_hello_sent_no_server_hello"
+            || diagnostic == "tls_alert_after_client_hello"
+            || diagnostic == "short_tls_response_after_client_hello"
+            || diagnostic == "unrecognized_response_after_client_hello"
+            || diagnostic == "unrecognized_tls_response_after_client_hello"
+            || diagnostic == "server_hello_hmac_mismatch";
+    if (!recipePhase) {
+        return false;
+    }
+    MtProxyRecoveryAction action = mtProxyRecoveryActionForPhase(diagnostic, 0);
+    return mtProxyRecoveryActionAdvancesRecipe(action);
 }
 
 MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe(const std::string &probeKey) {

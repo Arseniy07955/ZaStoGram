@@ -14,6 +14,7 @@ SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 ADAPTIVE_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
+HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
 MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
 MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 WRAPPER_CPP = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
@@ -40,6 +41,7 @@ def main() -> None:
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
     adaptive_cpp = text(ADAPTIVE_CPP)
+    handshake_scheduler_cpp = text(HANDSHAKE_SCHEDULER_CPP)
     socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     manager_cpp = text(MANAGER_CPP)
     manager_h = text(MANAGER_H)
@@ -165,20 +167,24 @@ def main() -> None:
     )
     require(
         "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in socket_cpp
-        and "mtProxyConnectionPatternUsesAdmission" in socket_cpp
+        and "mtProxyHandshakeSchedulerUsesAdmission" in socket_cpp
+        and "mtProxyHandshakeSchedulerUsesAdmission(int32_t mode)" in handshake_scheduler_cpp
         and "admission_disabled" in socket_cpp,
         "ConnectionSocket must use runtime connection-pattern state instead of a compile-time disabled flag",
     )
-    local_dequeue_guard = (
-        "if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp
-        or "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n            hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp
-    )
-    global_dequeue_guard = (
-        "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n            hasNextRequest = mtProxyTakeNextQueuedRequestGlobalLocked" in socket_cpp
+    require(
+        "releaseRequest.suppressQueuedGrant = suppressQueuedGrant" in socket_cpp
+        and "mtProxyHandshakeSchedulerRelease(releaseRequest)" in socket_cpp
+        and "if (!request.suppressQueuedGrant && mtProxyHandshakeSchedulerUsesAdmission(mode))" in handshake_scheduler_cpp
+        and "mtProxyTakeNextQueuedRequestGlobalLocked(request.now, mode, decision.nextRequest)" in handshake_scheduler_cpp,
+        "ConnectionSocket must not grant queued admission requests after the runtime gate is disabled",
     )
     require(
-        local_dequeue_guard or global_dequeue_guard,
-        "ConnectionSocket must not grant queued admission requests after the runtime gate is disabled",
+        "MtProxyRequestClass" in handshake_scheduler_cpp
+        and "request_class=%s" in socket_cpp
+        and "mtProxyHandshakeHeavyBlockedBeforeUsable" in handshake_scheduler_cpp
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT" in handshake_scheduler_cpp,
+        "runtime connection-pattern scheduler must be request-class aware without bypassing soft-mux/admission gates",
     )
     for path in (STRINGS, STRINGS_RU):
         source = text(path)

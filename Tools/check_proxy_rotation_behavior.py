@@ -11,6 +11,8 @@ CONNECTIONS = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/Connections
 ROTATION = MESSENGER / "ProxyRotationController.java"
 ENGINE = MESSENGER / "ProxyRotationEngine.java"
 STORE = MESSENGER / "ProxyRuntimeStateStore.java"
+REDUCER = MESSENGER / "ProxyEventReducer.java"
+VISIBLE = MESSENGER / "ProxyVisibleStateStore.java"
 HEALTH = MESSENGER / "ProxyHealthStore.java"
 STATUS = MESSENGER / "ProxyStatusMirror.java"
 SCHEDULER = MESSENGER / "ProxyCheckScheduler.java"
@@ -76,6 +78,17 @@ def ordered(body: str, *needles: str) -> bool:
             return False
         cursor = index
     return True
+
+
+def proxy_phase_cases(body: str) -> set[str]:
+    result: set[str] = set()
+    prefix = "case ProxyCheckDiagnostics."
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        result.add(stripped[len(prefix):].split(":", 1)[0])
+    return result
 
 
 def runtime_log_fixture(*proxy_rotation_lines: str, include_success: bool = False) -> str:
@@ -156,7 +169,7 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
             runtime_log_fixture(
                 "06-25 20:34:00.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army active_selected=1",
                 "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army proxy_check_cancelled=0 native_cancelled=3",
-                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
+                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain evidence=config_invalid_secret endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
                 "06-25 20:34:01.050 proxy_control decision=visible_only source=native_stage account=0 phase=endpoint_cooldown endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
             ),
             encoding="utf-8",
@@ -165,7 +178,7 @@ def run_runtime_rotation_log_checks(failures: list[str]) -> None:
             runtime_log_fixture(
                 "06-25 20:34:00.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army active_selected=1",
                 "06-25 20:34:00.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army proxy_check_cancelled=0 native_cancelled=3",
-                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
+                "06-25 20:34:00.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain evidence=config_invalid_secret endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army probe=sberbank.dns.army:45631:secret_hash=1111111111111111:sberbank.dns.army",
                 "06-25 20:34:00.030 proxy_control decision=ignored_rotated_away source=native_stage account=0 phase=ignored_cancelled_generation endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
                 "06-25 20:34:01.050 proxy_control decision=ignored_rotated_away source=native_stage account=0 phase=endpoint_cooldown endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army",
             ),
@@ -285,6 +298,8 @@ def main() -> int:
     rotation = read(ROTATION)
     engine = read(ENGINE)
     store = read(STORE)
+    reducer = read(REDUCER)
+    visible = read(VISIBLE)
     health = read(HEALTH)
     status = read(STATUS)
     scheduler = read(SCHEDULER)
@@ -302,8 +317,15 @@ def main() -> int:
     record_switch = method_body(engine, "void recordSwitch")
     is_candidate_allowed = method_body(engine, "private boolean isCandidateAllowed")
     should_schedule_fallback = method_body(store, "public static boolean shouldScheduleFallback")
-    on_native_stage = method_body(store, "public static Decision onNativeStage")
+    on_native_stage_facade = method_body(store, "public static Decision onNativeStage")
+    on_native_stage = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
     mark_endpoint_failure = method_body(store, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
+
+    require(
+        "return ProxyEventReducer.reduce(event)" in on_native_stage_facade,
+        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        failures,
+    )
 
     require(
         ordered(
@@ -365,9 +387,10 @@ def main() -> int:
     )
     require(
         "PUNITIVE_FAILURES_TO_ROTATE = 2" in health
+        and "PUNITIVE_FAILURES_TO_ROTATE" not in store + reducer + visible
         and "PUNITIVE_FAILURE_WINDOW_MS = 30 * 1000L" in health
         and "USABLE_SUCCESS_HOLD_MS = 45 * 1000L" in health,
-        "rotation hysteresis must require two punitive failures inside a 30-second window with a 45-second usable-success hold",
+        "ProxyHealthStore must own rotation hysteresis constants and keep two punitive failures inside a 30-second window with a 45-second usable-success hold",
         failures,
     )
     require(
@@ -378,6 +401,8 @@ def main() -> int:
     )
     punitive_body = method_body(policy, "public static boolean isPunitiveFailure")
     one_shot_terminal_body = method_body(policy, "public static boolean isOneShotTerminal")
+    terminal_exact_body = method_body(policy, "private static boolean isTerminalExactConfigPhase")
+    evidence_body = method_body(policy, "public static String evidenceForPhase")
     require(
         "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in punitive_body
         and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in one_shot_terminal_body,
@@ -388,6 +413,23 @@ def main() -> int:
         "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:" in one_shot_terminal_body
         and "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:" in one_shot_terminal_body,
         "invalid secret/domain phases must remain one-shot terminal",
+        failures,
+    )
+    terminal_secret_cases = {"SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR", "SECRET_PARSE_INVALID_DOMAIN"}
+    require(
+        proxy_phase_cases(one_shot_terminal_body) == terminal_secret_cases
+        and proxy_phase_cases(terminal_exact_body) == terminal_secret_cases,
+        "terminal exact config and one-shot terminal handling must stay narrowed to invalid secret/domain phases",
+        failures,
+    )
+    require(
+        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in evidence_body
+        and "EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO" in evidence_body
+        and "case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:" in evidence_body
+        and "EVIDENCE_POST_HANDSHAKE_NO_APP_DATA" in evidence_body
+        and "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:" in evidence_body
+        and "EVIDENCE_CONFIG_INVALID_SECRET" in evidence_body,
+        "ProxyPhasePolicy must expose evidence classes for Java recovery decisions",
         failures,
     )
     for phase in NON_PUNITIVE_ROTATION_PHASES:
@@ -497,7 +539,7 @@ def main() -> int:
             on_native_stage,
             "shouldHoldHostResolveFailureByDnsOutage(currentProxy, event.phase, event.timestamp)",
             "decision=dns_outage_hold",
-            "ProxyStatusMirror.mirrorVisiblePhase",
+            "ProxyVisibleStateStore.mirrorVisiblePhaseIfAllowed",
             "ProxyHealthStore.rememberLiveFailure",
         ),
         "native host_resolve_failed must be held by DNS outage before visible overwrite, endpoint backoff, or rotation",
@@ -550,6 +592,40 @@ def main() -> int:
         "HashMap<String, EndpointState> endpointStates" in health
         and "endpointStates" not in store,
         "endpoint health state must live only in ProxyHealthStore, not the runtime facade",
+        failures,
+    )
+    require(
+        "DNS_VISIBLE_DELAY_MS" in visible
+        and "DNS_VISIBLE_DELAY_MS" not in store
+        and "pendingDnsVisible" in visible
+        and "scheduleDnsVisiblePhase" in visible
+        and "ProxyVisibleStateStore.scheduleDnsVisiblePhase" in on_native_stage,
+        "ProxyVisibleStateStore must own DNS visible debounce state and scheduling",
+        failures,
+    )
+    require(
+        "if (terminalExactConfig)" in on_native_stage
+        and "return terminalExactConfigVerdict(currentProxy, event, visibleChanged)" in on_native_stage
+        and "if (ProxyPhasePolicy.terminalExactConfig(normalizedDiagnostic))" in store,
+        "terminal_proxy_config_unsupported must stay limited to terminal exact config phases",
+        failures,
+    )
+    require(
+        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in punitive_body
+        and "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" not in one_shot_terminal_body
+        and "ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp)" in on_native_stage
+        and "decision=held_by_failure_hysteresis" in on_native_stage
+        and "decision=backoff" in on_native_stage
+        and "evidence=" in on_native_stage
+        and "quarantineAndCancelEndpoint(currentProxy, event.phase" in on_native_stage,
+        "handshake_profiles_exhausted must stay on the evidence-aware backoff/rotation hysteresis path",
+        failures,
+    )
+    require(
+        "ProxyPhasePolicy.evidenceForPhase(state.lastDiagnostic)" in health
+        and "decision=backoff" in health
+        and "evidence=" in health,
+        "ProxyHealthStore backoff decisions must include typed evidence",
         failures,
     )
     require(

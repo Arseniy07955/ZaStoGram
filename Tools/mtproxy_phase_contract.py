@@ -11,6 +11,30 @@ ENDPOINT_EXACT = "exact"
 ENDPOINT_NETWORK = "network"
 ENDPOINT_NONE = "none"
 
+EVIDENCE_NONE = "none"
+EVIDENCE_PRE_TCP_LOCAL_WAIT = "pre_tcp_local_wait"
+EVIDENCE_DNS_FAILURE = "dns_failure"
+EVIDENCE_TCP_FAILURE = "tcp_failure"
+EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO = "no_bytes_after_client_hello"
+EVIDENCE_SERVER_BYTES_PARSER_FAILURE = "server_bytes_parser_failure"
+EVIDENCE_SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch"
+EVIDENCE_POST_HANDSHAKE_NO_APP_DATA = "post_handshake_no_app_data"
+EVIDENCE_CONFIG_INVALID_SECRET = "config_invalid_secret"
+EVIDENCE_CANCELLED_OR_SHADOWED = "cancelled_or_shadowed"
+
+EVIDENCE_CLASSES = {
+    EVIDENCE_NONE,
+    EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    EVIDENCE_DNS_FAILURE,
+    EVIDENCE_TCP_FAILURE,
+    EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO,
+    EVIDENCE_SERVER_BYTES_PARSER_FAILURE,
+    EVIDENCE_SERVER_HELLO_HMAC_MISMATCH,
+    EVIDENCE_POST_HANDSHAKE_NO_APP_DATA,
+    EVIDENCE_CONFIG_INVALID_SECRET,
+    EVIDENCE_CANCELLED_OR_SHADOWED,
+}
+
 
 @dataclass(frozen=True)
 class MtProxyPhase:
@@ -98,6 +122,38 @@ PHASES = (
     MtProxyPhase("reconnect_backoff_suppressed", PHASE_NEUTRAL, native=True, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
 )
 
+PHASE_EVIDENCE = {
+    "connection_not_started": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "admission_timeout": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "endpoint_cooldown_timeout": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "mtproxy_probe_wait_timeout": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "dns_coalesce_timeout": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "tcp_connect_gate_timeout": EVIDENCE_PRE_TCP_LOCAL_WAIT,
+    "dns_negative_cache_hit": EVIDENCE_DNS_FAILURE,
+    "dns_blocked_zero_address": EVIDENCE_DNS_FAILURE,
+    "host_resolve_failed": EVIDENCE_DNS_FAILURE,
+    "host_resolve_timeout": EVIDENCE_DNS_FAILURE,
+    "tcp_not_connected": EVIDENCE_TCP_FAILURE,
+    "tcp_connected_no_pong": EVIDENCE_TCP_FAILURE,
+    "faketls_server_hello_wait_timeout": EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO,
+    "true_client_hello_timeout": EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO,
+    "client_hello_sent_no_server_hello": EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO,
+    "tls_alert_after_client_hello": EVIDENCE_SERVER_BYTES_PARSER_FAILURE,
+    "short_tls_response_after_client_hello": EVIDENCE_SERVER_BYTES_PARSER_FAILURE,
+    "unrecognized_response_after_client_hello": EVIDENCE_SERVER_BYTES_PARSER_FAILURE,
+    "unrecognized_tls_response_after_client_hello": EVIDENCE_SERVER_BYTES_PARSER_FAILURE,
+    "server_hello_hmac_mismatch": EVIDENCE_SERVER_HELLO_HMAC_MISMATCH,
+    "post_handshake_no_appdata": EVIDENCE_POST_HANDSHAKE_NO_APP_DATA,
+    "mtproxy_packet_sent_no_response": EVIDENCE_POST_HANDSHAKE_NO_APP_DATA,
+    "dropped_early_after_appdata": EVIDENCE_POST_HANDSHAKE_NO_APP_DATA,
+    "dropped_after_appdata": EVIDENCE_POST_HANDSHAKE_NO_APP_DATA,
+    "secret_parse_invalid_domain_control_char": EVIDENCE_CONFIG_INVALID_SECRET,
+    "secret_parse_invalid_domain": EVIDENCE_CONFIG_INVALID_SECRET,
+    "background_handshake_aborted": EVIDENCE_CANCELLED_OR_SHADOWED,
+    "shadowed_socket_failure": EVIDENCE_CANCELLED_OR_SHADOWED,
+    "ignored_cancelled_generation": EVIDENCE_CANCELLED_OR_SHADOWED,
+}
+
 
 def _validate_contract() -> None:
     names = [phase.name for phase in PHASES]
@@ -109,6 +165,8 @@ def _validate_contract() -> None:
             raise RuntimeError(f"invalid phase kind for {phase.name}: {phase.kind}")
         if phase.endpoint_key not in {ENDPOINT_EXACT, ENDPOINT_NETWORK, ENDPOINT_NONE}:
             raise RuntimeError(f"invalid endpoint key mode for {phase.name}: {phase.endpoint_key}")
+    if not set(PHASE_EVIDENCE.values()) <= EVIDENCE_CLASSES:
+        raise RuntimeError("phase evidence mapping contains unknown evidence classes")
 
 
 def phases() -> tuple[MtProxyPhase, ...]:
@@ -129,6 +187,20 @@ def analyzer_phase_names() -> set[str]:
 
 def analyzer_failure_phases() -> set[str]:
     return {phase.name for phase in PHASES if phase.analyzer and phase.kind == PHASE_FAILURE}
+
+
+def evidence_classes() -> set[str]:
+    return set(EVIDENCE_CLASSES)
+
+
+def evidence_for_phase(phase: str, response_bytes: int = 0) -> str:
+    if phase == "server_closed_after_client_hello":
+        return (
+            EVIDENCE_SERVER_BYTES_PARSER_FAILURE
+            if response_bytes > 0
+            else EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO
+        )
+    return PHASE_EVIDENCE.get(phase, EVIDENCE_NONE)
 
 
 def java_visible_live_phases() -> set[str]:

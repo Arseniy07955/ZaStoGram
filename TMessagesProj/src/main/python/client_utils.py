@@ -232,17 +232,32 @@ def send_message(params, account=None):
     return spm
 
 
-class _RequestDelegate(dynamic_proxy(RequestDelegate)):
-    def __init__(self, fn):
+class RequestCallback(dynamic_proxy(RequestDelegate)):
+    def __init__(self, fn=None):
         super().__init__()
         self.fn = fn
 
     def run(self, response, error):
+        if self.fn is None:
+            return
         try:
             self.fn(response, error)
         except Exception as e:
             from android_utils import log
             log(e)
+
+
+_RequestDelegate = RequestCallback
+
+
+def _coerce_request_callback(on_complete):
+    if on_complete is None:
+        return None
+    if isinstance(on_complete, RequestCallback):
+        return on_complete
+    if hasattr(on_complete, "run") and not callable(on_complete):
+        return on_complete
+    return RequestCallback(on_complete)
 
 
 def send_request(request, on_complete=None, flags=None, connection_type=None):
@@ -251,7 +266,7 @@ def send_request(request, on_complete=None, flags=None, connection_type=None):
     on the network thread (wrap UI work in run_on_ui_thread). Returns the request token (int).
     """
     cm = get_connections_manager()
-    delegate = _RequestDelegate(on_complete) if on_complete is not None else None
+    delegate = _coerce_request_callback(on_complete)
     if flags is None:
         return cm.sendRequest(request, delegate)
     if connection_type is None:

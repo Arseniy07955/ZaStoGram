@@ -7,6 +7,8 @@ from mtproxy_phase_contract import (
     analyzer_failure_phases,
     analyzer_phase_names,
     endpoint_key_phases,
+    evidence_classes,
+    evidence_for_phase,
     java_phase_names,
     java_success_phases,
     java_visible_live_phases,
@@ -28,6 +30,8 @@ STARTUP_TIMELINE = ROOT / "TMessagesProj/jni/tgnet/MtProxyStartupTimeline.cpp"
 CONNECTION = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 NATIVE_PHASE_CONTRACT = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
+NATIVE_FAILURE_EVIDENCE_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyFailureEvidence.h"
+NATIVE_FAILURE_EVIDENCE_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyFailureEvidence.cpp"
 
 
 def text(path: Path) -> str:
@@ -127,6 +131,8 @@ def main() -> int:
     connection = text(CONNECTION)
     analyzer = text(ANALYZER)
     native_contract_h = text(NATIVE_PHASE_CONTRACT)
+    native_failure_evidence_h = text(NATIVE_FAILURE_EVIDENCE_H)
+    native_failure_evidence_cpp = text(NATIVE_FAILURE_EVIDENCE_CPP)
 
     constants = java_constants(diagnostics)
     native_constants = native_phase_constants(native_contract_h)
@@ -152,6 +158,57 @@ def main() -> int:
     require(
         set(native_constants.values()) == native_phase_names(),
         "MtProxyPhaseContract.h constants must match mtproxy_phase_contract native phases",
+    )
+    require(
+        "enum class MtProxyFailureEvidenceKind" in native_failure_evidence_h
+        and "mtProxyEvidenceForPhase" in native_failure_evidence_h
+        and "mtProxyFailureEvidenceName" in native_failure_evidence_h,
+        "native MTProxy failure evidence contract must expose the enum, phase mapper, and wire-name helper",
+    )
+    for kind in (
+        "None",
+        "PreTcpLocalWait",
+        "DnsFailure",
+        "TcpFailure",
+        "NoBytesAfterClientHello",
+        "ServerBytesParserFailure",
+        "ServerHelloHmacMismatch",
+        "PostHandshakeNoAppData",
+        "ConfigInvalidSecret",
+        "CancelledOrShadowed",
+    ):
+        require(f"{kind}," in native_failure_evidence_h, f"native failure evidence enum must include {kind}")
+    for evidence in evidence_classes():
+        require(f'"{evidence}"' in native_failure_evidence_cpp, f"native failure evidence name helper must expose {evidence}")
+    require(
+        "MtProxyPhase::ServerClosedAfterClientHello" in native_failure_evidence_cpp
+        and "responseBytes == 0" in native_failure_evidence_cpp
+        and "MtProxyFailureEvidenceKind::ServerBytesParserFailure" in native_failure_evidence_cpp,
+        "server_closed_after_client_hello evidence must branch on responseBytes",
+    )
+    required_evidence_mappings = {
+        "connection_not_started": "pre_tcp_local_wait",
+        "admission_timeout": "pre_tcp_local_wait",
+        "dns_negative_cache_hit": "dns_failure",
+        "dns_blocked_zero_address": "dns_failure",
+        "host_resolve_failed": "dns_failure",
+        "host_resolve_timeout": "dns_failure",
+        "tcp_not_connected": "tcp_failure",
+        "faketls_server_hello_wait_timeout": "no_bytes_after_client_hello",
+        "tls_alert_after_client_hello": "server_bytes_parser_failure",
+        "short_tls_response_after_client_hello": "server_bytes_parser_failure",
+        "unrecognized_response_after_client_hello": "server_bytes_parser_failure",
+        "server_hello_hmac_mismatch": "server_hello_hmac_mismatch",
+        "post_handshake_no_appdata": "post_handshake_no_app_data",
+        "secret_parse_invalid_domain_control_char": "config_invalid_secret",
+        "secret_parse_invalid_domain": "config_invalid_secret",
+    }
+    for phase, evidence in required_evidence_mappings.items():
+        require(evidence_for_phase(phase) == evidence, f"phase contract must map {phase} to evidence={evidence}")
+    require(
+        evidence_for_phase("server_closed_after_client_hello", 0) == "no_bytes_after_client_hello"
+        and evidence_for_phase("server_closed_after_client_hello", 1) == "server_bytes_parser_failure",
+        "phase contract must split server_closed_after_client_hello evidence by response bytes",
     )
 
     require(set(constants.values()) - legacy_java_aliases == contract_java, "ProxyCheckDiagnostics active constants must match mtproxy_phase_contract")

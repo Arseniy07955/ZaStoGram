@@ -13,12 +13,16 @@ SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
 ENDPOINT_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp"
 ADAPTIVE_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp"
+HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakePlan.cpp"
 PROBE_COORDINATOR = ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.cpp"
+RECOVERY_POLICY = ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp"
+DATA_PATH_SHAPER = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
 CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 SCHEDULER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckScheduler.java"
 STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java"
+VISIBLE_STORE = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java"
 HEALTH = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyHealthStore.java"
 STATUS_MIRROR = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyStatusMirror.java"
 POLICY = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java"
@@ -61,7 +65,10 @@ def main() -> None:
     socket = read(SOCKET)
     endpoint_policy = read(ENDPOINT_POLICY)
     adaptive_policy = read(ADAPTIVE_POLICY)
+    handshake_plan = read(HANDSHAKE_PLAN)
     probe_coordinator = read(PROBE_COORDINATOR)
+    recovery_policy = read(RECOVERY_POLICY)
+    data_path_shaper = read(DATA_PATH_SHAPER)
     socket_h = read(SOCKET_H)
     socket_state = socket_h + "\n" + read(MACHINE_H) + "\n" + socket
     connections_java = read(CONNECTIONS_JAVA)
@@ -69,6 +76,7 @@ def main() -> None:
     diagnostics = read(DIAGNOSTICS)
     scheduler = read(SCHEDULER)
     store = read(STORE)
+    visible_store = read(VISIBLE_STORE)
     health = read(HEALTH)
     status_mirror = read(STATUS_MIRROR)
     policy = read(POLICY)
@@ -200,12 +208,18 @@ def main() -> None:
         "unrecognized_response_after_client_hello",
         "unrecognized_tls_response_after_client_hello",
         "server_hello_hmac_mismatch",
-        "post_handshake_no_appdata",
     ):
         require(phase in recipe, f"FakeTLS recipe must react to {phase}")
     require(
-        "currentSecretIsFakeTls && MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure,
-        "recipe level must advance only for FakeTLS connections",
+        "post_handshake_no_appdata" not in recipe
+        and "PostHandshakeShapingBackoff" in recovery_policy,
+        "post-handshake data-path failures must use shaping/backoff, not FakeTLS recipe cursor movement",
+    )
+    require(
+        "currentSecretIsFakeTls" in failure
+        and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure
+        and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure,
+        "recipe level must advance only for FakeTLS connections with recovery-action cursor movement",
     )
     require(
         "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF" in adaptive_policy
@@ -214,17 +228,23 @@ def main() -> None:
         and "CLIENT_HELLO_FIREFOX_ANDROID_NO_FRAGMENT" in adaptive_policy
         and "MT_PROXY_SERVER_HELLO_PARSER_EXTRA_RECORDS" in adaptive_policy
         and "MT_PROXY_SERVER_HELLO_PARSER_FRAGMENTED_SERVER_HELLO" in adaptive_policy
-        and "currentClientHelloFragmentation = recipe.clientHelloFragmentation" in socket,
+        and "MtProxyAdaptivePolicy::recipeForCursor" in handshake_plan
+        and "currentClientHelloFragmentation = plan.clientHelloFragmentation" in socket,
         "phase-adaptive recipe must progress by explicit ClientHello families and parser variants",
     )
 
     # Layer 4: data path is guarded and data-aware; no idle sleeps that stall MTProto.
     require(
-        "timingMode != MT_PROXY_TIMING_OFF && pendingTlsFrame == nullptr && outgoingByteStream->hasData()" in send_frame,
+        "MtProxyDataTimingDecision timingDecision = mtProxyDataTimingDecision" in send_frame
+        and "timingInput.hasPendingTlsFrame = pendingTlsFrame != nullptr;" in send_frame
+        and "timingInput.hasOutgoingData = outgoingByteStream->hasData();" in send_frame
+        and "input.hasPendingTlsFrame || !input.hasOutgoingData" in data_path_shaper,
         "IPT must be scheduled only when another MTProto payload is already pending",
     )
     require(
-        "timingMode == MT_PROXY_TIMING_OFF || pendingTlsFrame != nullptr || nextTlsFrameWriteTime == 0" in timing_wait,
+        "mtProxyDataTimingWaitDecision" in timing_wait
+        and "input.hasPendingTlsFrame = pendingTlsFrame != nullptr;" in timing_wait
+        and "mode == MT_PROXY_TIMING_OFF || input.hasPendingTlsFrame || input.nextWriteTime == 0" in data_path_shaper,
         "IPT wait must not run during partial TLS-frame writes or idle state",
     )
     require(
@@ -242,7 +262,7 @@ def main() -> None:
     require(
         "ProxyConnectionEvent.nativeStage" in stage_bridge
         and "ProxyRuntimeStateStore.onNativeStage(event)" in stage_bridge
-        and "ProxyStatusMirror.mirrorVisiblePhase(currentProxy, event.phase, event.timestamp)" in store
+        and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, event.phase, event.timestamp)" in visible_store
         and "static void mirrorVisiblePhase" in status_mirror
         and "postNotificationName(NotificationCenter.proxyConnectionStageChanged" in stage_bridge,
         "native live stages must update the current proxy and notify the proxy UI immediately",

@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string>
 #include "MtProxyOptions.h"
+#include "MtProxyRecoveryPolicy.h"
 
 class MtProxyAdaptivePolicy {
 public:
@@ -146,6 +147,7 @@ public:
     static const char *classicVariantName(int32_t classicVariant);
     static RecipeCursor initialCursor(uint32_t allowedSniVariants);
     static bool nextCursor(RecipeCursor *cursor, const std::string &diagnostic, uint32_t allowedSniVariants, bool classicFallbackAllowed);
+    static bool nextCursorForRecovery(RecipeCursor *cursor, MtProxyRecoveryAction action, uint32_t allowedSniVariants, bool classicFallbackAllowed);
     static CompatibilityRecipe recipeForCursor(const RecipeInput &input, const RecipeCursor &cursor);
     static RecipeResult applyRecipe(const RecipeInput &input);
     static MtProxyRecipe recipeForResult(const RecipeInput &input, const RecipeResult &result);

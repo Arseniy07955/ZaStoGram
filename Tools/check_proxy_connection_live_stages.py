@@ -12,6 +12,8 @@ FILES = {
     "diagnostics": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java",
     "policy": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java",
     "store": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java",
+    "reducer": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyEventReducer.java",
+    "visible_store": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java",
     "status": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyStatusMirror.java",
     "endpoint_key": ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyEndpointKey.java",
     "connections_java": ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java",
@@ -162,15 +164,17 @@ def main() -> None:
         "fresh failure phases must use diagnostic timestamp, not only proxy-check availability timestamp",
     )
     store_text = text("store")
+    reducer_text = text("reducer")
+    visible_store_text = text("visible_store")
     require(
-        "ProxyPhasePolicy.isFailure(event.phase)" in store_text
-        and "!ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(event.phase)" in store_text,
+        "ProxyPhasePolicy.isFailure(event.phase)" in reducer_text
+        and "!ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(event.phase)" in reducer_text,
         "current proxy stage callback must accept concrete failure phases while rejecting unknown_fail noise",
     )
     require(
         "shouldKeepFreshFailure" in diagnostics
         and "isEarlyRetryPhase" in diagnostics
-        and "ProxyCheckDiagnostics.shouldKeepFreshFailure(currentProxy, event.phase)" in store_text,
+        and "ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, event.phase)" in visible_store_text,
         "fresh terminal failures must not be overwritten by early retry phases such as admission_queue or host_resolve_start",
     )
     require(
@@ -188,8 +192,8 @@ def main() -> None:
         "server_hello_hmac_ok must remain a handshake live phase, not a data-path usable success",
     )
     require(
-        "ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)" in store_text
-        and "markConnectionUsable(currentProxy, event.phase, event.timestamp)" in store_text,
+        "ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)" in reducer_text
+        and "ProxyRuntimeStateStore.markConnectionUsable(currentProxy, event.phase, event.timestamp)" in reducer_text,
         "concrete success phases from native must clear stale Java endpoint backoff and fresh terminal failures",
     )
     require(
@@ -209,14 +213,14 @@ def main() -> None:
         "endpoint cooldown must not overwrite a fresher concrete proxy phase",
     )
     require(
-        "boolean selectedAccountStage = event.account == UserConfig.selectedAccount;" in store_text
-        and "boolean stageTargetsCurrentProxy = currentProxy != null && concretePhase && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey);" in store_text
-        and "if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))" in store_text,
+        "boolean selectedAccountStage = event.account == UserConfig.selectedAccount;" in reducer_text
+        and "boolean stageTargetsCurrentProxy = currentProxy != null && concretePhase && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey);" in reducer_text
+        and "if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))" in reducer_text,
         "native proxy live stages from background accounts must not overwrite the shared visible proxy diagnostic",
     )
-    stage_callback = store_text[
-        store_text.find("public static Decision onNativeStage"):
-        store_text.find("public static boolean isFresh", store_text.find("public static Decision onNativeStage"))
+    stage_callback = reducer_text[
+        reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"):
+        reducer_text.find("private static boolean isActiveProxyEvent", reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"))
     ]
     mark_failure_idx = stage_callback.find("rememberLiveFailure(currentProxy, event.phase, event.timestamp);")
     selected_ui_idx = stage_callback.find("if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))")
@@ -229,7 +233,7 @@ def main() -> None:
     require(
         "final String endpointKey" in text("connections_java")
         and "ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin)" in text("connections_java")
-        and "ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)" in store_text,
+        and "ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)" in reducer_text,
         "native proxy live stages from stale endpoint/secret keys must not overwrite the currently selected proxy diagnostic",
     )
     require(
@@ -266,7 +270,9 @@ def main() -> None:
         and 'publishProxyConnectionStage("client_hello_sent")' in text("socket")
         and 'publishProxyConnectionStage("admission_hold_after_client_hello_failure")' in text("socket")
         and 'publishProxyConnectionStage("server_hello_hmac_ok")' in text("socket")
-        and 'publishProxyConnectionStage("first_tls_app_recv")' in text("socket"),
+        and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in text("socket")
+        and "observation.phase = MtProxyPhase::FirstMtproxyPacketRecv" in text("socket")
+        and "publishMtProxySocketObservation(observation)" in text("socket"),
         "ConnectionSocket must publish live stages for plain dd/legacy MTProxy too, not only FakeTLS ee",
     )
     require(
@@ -282,7 +288,7 @@ def main() -> None:
                 and "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, endpointKey)" in text("rotation")
             )
         )
-        and "decision=ignored_stale_endpoint" in text("store"),
+        and "decision=ignored_stale_endpoint" in text("reducer"),
         "UI and Java lifecycle code must ignore proxy live stages from stale endpoint/secret keys",
     )
     require(

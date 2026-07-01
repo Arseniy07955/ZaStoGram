@@ -12,6 +12,8 @@ import argparse
 import re
 from pathlib import Path
 
+from mtproxy_phase_contract import evidence_classes
+
 
 REASON_RE = re.compile(r"(?<![A-Za-z0-9_])reason=([^ ]+)")
 CONNECTION_RE = re.compile(r"connection\((0x[0-9a-fA-F]+)\)")
@@ -26,7 +28,19 @@ DISCONNECT_REQUIRED_FIELDS = (
     "tcp_gate_active=",
 )
 ALLOWED_DATA_PATH_REASONS = {"first_tls_app_recv", "first_mtproxy_packet_recv"}
+FAILURE_EVIDENCE_CLASSES = evidence_classes()
+RECIPE_FAILURE_MARKERS = ("mtproxy_startup recipe_failed", "mtproxy_startup recipe_exhausted")
 USABLE_SUCCESS_PROXY_PHASES = {"first_tls_app_recv", "first_mtproxy_packet_recv"}
+NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = {
+    "recipe_failed",
+    "handshake_profiles_exhausted",
+    "secret_parse_invalid_domain_control_char",
+    "secret_parse_invalid_domain",
+    "dns_blocked_zero_address",
+    "post_handshake_no_appdata",
+    "first_tls_app_recv",
+    "first_mtproxy_packet_recv",
+}
 VISIBLE_SUCCESS_HOLD_MS = 45 * 1000
 DNS_VISIBLE_DELAY_MS = 800
 DNS_VISIBLE_TELEMETRY_PHASES = {"host_resolve_start", "dns_coalesce_wait"}
@@ -102,6 +116,13 @@ DNS_OUTAGE_HOLD_MS = 60 * 1000
 DNS_OUTAGE_PROVIDERS = {"system", "google_json_doh", "cloudflare_json_doh"}
 ROTATED_AWAY_HOLD_MS = 45 * 1000
 ROTATED_AWAY_ALLOWED_DECISIONS = {"cancel_endpoint_attempts", "ignored_cancelled_generation", "ignored_rotated_away", "ignored_stale_endpoint"}
+STANDARD_HMAC_PARSER = "standard_hmac_parser"
+NO_BYTE_AFTER_CLIENT_HELLO_PHASES = {
+    "true_client_hello_timeout",
+    "faketls_server_hello_wait_timeout",
+    "server_closed_after_client_hello",
+    "client_hello_sent_no_server_hello",
+}
 
 
 def resolve_markers_path(path: Path) -> Path:
@@ -141,9 +162,51 @@ def line_field(line: str, name: str) -> str:
     return match.group(1) if match else ""
 
 
+def line_int_field(line: str, name: str) -> int:
+    try:
+        return int(line_field(line, name))
+    except ValueError:
+        return 0
+
+
 def proxy_control_decision(line: str) -> str:
     match = PROXY_CONTROL_RE.search(line)
     return match.group(1) if match else ""
+
+
+def endpoint_from_key(key: str) -> str:
+    if not key:
+        return ""
+    prefix, separator, tail = key.rpartition(":")
+    if separator and prefix and not tail.isdigit():
+        return prefix
+    return key
+
+
+def line_endpoint(line: str, connection_endpoints: dict[str, str]) -> str:
+    endpoint = line_field(line, "endpoint")
+    if endpoint:
+        return endpoint
+    key = line_field(line, "key") or line_field(line, "network_key")
+    if key:
+        return endpoint_from_key(key)
+    connection = line_connection(line)
+    return connection_endpoints.get(connection, "")
+
+
+def verify_failure_evidence(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    for line in lines:
+        evidence = line_field(line, "evidence")
+        if evidence and evidence not in FAILURE_EVIDENCE_CLASSES:
+            failures.append(f"unknown MTProxy failure evidence class: {line}")
+        if not any(marker in line for marker in RECIPE_FAILURE_MARKERS):
+            continue
+        if not evidence:
+            failures.append(f"recipe failure marker missing evidence= field: {line}")
+        if "response_bytes=" not in line:
+            failures.append(f"recipe failure marker missing response_bytes= field: {line}")
+    return failures
 
 
 def same_proxy_endpoint(left: str, right: str) -> bool:
@@ -603,6 +666,83 @@ def verify_log_noise_and_tlparse(lines: list[str]) -> list[str]:
     return failures
 
 
+def verify_stage2_runtime_rules(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    socket_connect_seen: set[str] = set()
+    connection_endpoints: dict[str, str] = {}
+    usable_successes: list[tuple[int | None, str, str, str]] = []
+
+    for line in lines:
+        connection = line_connection(line)
+        endpoint = line_endpoint(line, connection_endpoints)
+        if connection and endpoint:
+            connection_endpoints[connection] = endpoint
+        if connection and "mtproxy_startup socket_connect_start" in line:
+            socket_connect_seen.add(connection)
+
+        decision = proxy_control_decision(line)
+        phase = line_field(line, "phase") or line_field(line, "failed_phase")
+        evidence = line_field(line, "evidence")
+        response_bytes = line_int_field(line, "response_bytes")
+
+        if decision == "terminal_quarantine" and phase == "handshake_profiles_exhausted":
+            failures.append(f"handshake_profiles_exhausted must not terminal_quarantine: {line}")
+
+        next_parser = line_field(line, "next_parser_variant")
+        no_byte = evidence == "no_bytes_after_client_hello" or (
+            phase in NO_BYTE_AFTER_CLIENT_HELLO_PHASES
+            and not (phase == "server_closed_after_client_hello" and response_bytes > 0)
+        )
+        if next_parser and no_byte and next_parser != STANDARD_HMAC_PARSER:
+            failures.append(f"no-byte ClientHello evidence must keep standard_hmac_parser: {line}")
+
+        if phase == "post_handshake_no_appdata" and next_parser and next_parser != STANDARD_HMAC_PARSER:
+            failures.append(f"post_handshake_no_appdata must not enter parser recipe cross-product: {line}")
+
+        if "mtproxy_startup phase_adaptive_recipe" in line and line_field(line, "last") == "post_handshake_no_appdata":
+            parser_variant = line_field(line, "parser_variant") or line_field(line, "server_hello_parser")
+            if parser_variant and parser_variant != STANDARD_HMAC_PARSER:
+                failures.append(f"post_handshake_no_appdata must not enter parser recipe cross-product: {line}")
+
+        if connection and phase == "tcp_not_connected" and (
+            "mtproxy_startup close_diagnostic" in line or "mtproxy_startup endpoint_failure" in line
+        ) and connection not in socket_connect_seen:
+            failures.append(f"tcp_not_connected published before socket_connect_start: {line}")
+
+        if endpoint and (
+            "first_tls_app_recv" in line
+            or (line_reason(line) == "first_tls_app_recv" and "endpoint_data_path_success" in line)
+        ):
+            usable_successes.append((line_time_ms(line), endpoint, connection, line))
+
+        sibling_failure = (
+            endpoint
+            and phase in FRESH_USABLE_FAILURE_OVERWRITE_PHASES
+            and (
+                "mtproxy_startup close_diagnostic" in line
+                or "mtproxy_startup endpoint_failure" in line
+                or "mtproxy_startup reconnect_backoff" in line
+            )
+            and "close_diagnostic_suppressed" not in line
+            and "shadowed_socket_failure" not in line
+            and "reconnect_backoff_suppressed" not in line
+        )
+        if not sibling_failure:
+            continue
+        current_time = line_time_ms(line)
+        for success_time, success_endpoint, success_connection, success_line in usable_successes:
+            if connection and success_connection and connection == success_connection:
+                continue
+            if not same_proxy_endpoint(success_endpoint, endpoint):
+                continue
+            if success_time is not None and current_time is not None and current_time - success_time > VISIBLE_SUCCESS_HOLD_MS:
+                continue
+            failures.append(f"fresh first_tls_app_recv overwritten by sibling socket failure: {line} after {success_line}")
+            break
+
+    return failures
+
+
 def verify_lines(lines: list[str]) -> list[str]:
     failures: list[str] = []
     transport_state_lines = [line for line in lines if "transport_state=" in line]
@@ -660,6 +800,8 @@ def verify_lines(lines: list[str]) -> list[str]:
     failures.extend(verify_dns_resolver_logs(lines))
     failures.extend(verify_startup_warmup_fanout(lines))
     failures.extend(verify_log_noise_and_tlparse(lines))
+    failures.extend(verify_failure_evidence(lines))
+    failures.extend(verify_stage2_runtime_rules(lines))
 
     return failures
 

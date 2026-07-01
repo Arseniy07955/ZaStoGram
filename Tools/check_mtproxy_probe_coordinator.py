@@ -65,7 +65,7 @@ def verify_runtime_contract(failures: list[str]) -> None:
             "06-30 14:00:00.010 connection(0x2) mtproxy_startup probe_join key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru owner_generation=1",
             "06-30 14:00:00.020 proxy_control decision=telemetry_only source=native_stage origin=active_proxy account=1 phase=mtproxy_probe_wait endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru",
             "06-30 14:00:00.030 connection(0x1) mtproxy_startup client_hello_sent bytes=512 expected=512 domain_len=13",
-            "06-30 14:00:00.040 connection(0x1) mtproxy_startup recipe_failed key=fast2.mtproxy.zip:443:ee:xapi.ozon.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru phase=faketls_server_hello_wait_timeout next=legacy_no_grease",
+            "06-30 14:00:00.040 connection(0x1) mtproxy_startup recipe_failed key=fast2.mtproxy.zip:443:ee:xapi.ozon.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru phase=faketls_server_hello_wait_timeout evidence=no_bytes_after_client_hello response_bytes=0 next=legacy_no_grease",
         )
     )
     require(
@@ -90,7 +90,7 @@ def verify_runtime_contract(failures: list[str]) -> None:
 
     good_exhaustion = run_verifier(
         base_log(
-            "06-30 14:02:00.000 connection(0x1) mtproxy_startup recipe_exhausted key=fast2.mtproxy.zip:443:ee:xapi.ozon.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru failed_phase=faketls_server_hello_wait_timeout next=handshake_profiles_exhausted generation=3",
+            "06-30 14:02:00.000 connection(0x1) mtproxy_startup recipe_exhausted key=fast2.mtproxy.zip:443:ee:xapi.ozon.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:xapi.ozon.ru failed_phase=faketls_server_hello_wait_timeout evidence=no_bytes_after_client_hello response_bytes=0 next=handshake_profiles_exhausted generation=3",
             "06-30 14:02:00.010 proxy_control decision=held_by_failure_hysteresis source=native_stage origin=active_proxy account=0 phase=handshake_profiles_exhausted endpoint=fast2.mtproxy.zip:443:ee:xapi.ozon.ru failures=1",
         )
     )
@@ -290,11 +290,17 @@ def main() -> int:
         failures,
     )
     # --- Commit 3: admission_queue JNI out of lock + probeKey-only Java cancel ---
-    sched_lock_idx = socket_cpp.find("pthread_mutex_lock(&proxyHandshakeSchedulerMutex)")
-    sched_unlock_idx = socket_cpp.find("pthread_mutex_unlock(&proxyHandshakeSchedulerMutex)", sched_lock_idx)
+    scheduler_cpp = read(TGNET / "MtProxyHandshakeScheduler.cpp")
     admq_idx = socket_cpp.find('publishProxyConnectionStage("admission_queue")')
+    admit_idx = socket_cpp.find("mtProxyHandshakeSchedulerAdmit(request)")
     require(
-        "publishAdmissionQueue" in socket_cpp and admq_idx >= 0 and not (sched_lock_idx < admq_idx < sched_unlock_idx),
+        "proxyHandshakeSchedulerMutex" not in socket_cpp
+        and "proxyHandshakeSchedulerMutex" in scheduler_cpp
+        and "decision.publishQueue" in socket_cpp
+        and admit_idx >= 0
+        and admq_idx >= 0
+        and admit_idx < admq_idx
+        and "publishProxyConnectionStage" not in scheduler_cpp,
         "admission_queue JNI publish must be hoisted out of proxyHandshakeSchedulerMutex (lock-order-inversion safety)",
         failures,
     )

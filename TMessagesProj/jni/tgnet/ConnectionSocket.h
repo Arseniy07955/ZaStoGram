@@ -23,6 +23,7 @@ class ByteStream;
 class EventObject;
 class ByteArray;
 class Timer;
+struct MtProxySocketObservation;
 class ConnectionSocket {
 
 public:
@@ -171,6 +172,7 @@ private:
     void recordMtProxyEndpointFailure(const char *diagnostic, const char *reason);
     void recordMtProxyEndpointHandshakeOk(const char *reason);
     void recordMtProxyEndpointDataPathSuccess(const char *reason);
+    void publishMtProxySocketObservation(const MtProxySocketObservation &observation);
     void publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength);
     void closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason);
     bool mtProxyEndpointUseCachedHostAddress(const std::string &host, bool *ipv6, bool *blockedZeroAddress);
@@ -198,7 +200,6 @@ private:
     void clearPendingTlsFrame();
     bool buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t remaining);
     bool sendPendingTlsFrame();
-    uint32_t nextMtProxyTlsRecordPayloadSize(uint32_t remaining);
     bool scheduleMtProxyDataTimingIfNeeded();
     void startMtProxyStartupCover();
     bool mtProxyStartupCoverActive();

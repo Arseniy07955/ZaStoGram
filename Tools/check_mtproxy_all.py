@@ -61,6 +61,12 @@ STAGE1_EXTRACTION_CHECKS = {
     "check_mtproxy_faketls_path.py",
 }
 
+STAGE1_RUNTIME_EXTRACTION_CHECKS = {
+    "check_mtproxy_control_plane_one_pass.py",
+    "check_proxy_rotation_behavior.py",
+    "check_proxy_usable_success_hold.py",
+}
+
 
 def validate_check_list() -> None:
     expected = {
@@ -95,6 +101,12 @@ def validate_check_list() -> None:
     if missing_extraction:
         print("Missing Stage 1 extraction checks in check_mtproxy_all.py:", file=sys.stderr)
         for check in missing_extraction:
+            print(f" - {check}", file=sys.stderr)
+        raise SystemExit(1)
+    missing_runtime_extraction = sorted(STAGE1_RUNTIME_EXTRACTION_CHECKS - configured)
+    if missing_runtime_extraction:
+        print("Missing Stage 1 runtime extraction checks in check_mtproxy_all.py:", file=sys.stderr)
+        for check in missing_runtime_extraction:
             print(f" - {check}", file=sys.stderr)
         raise SystemExit(1)
 

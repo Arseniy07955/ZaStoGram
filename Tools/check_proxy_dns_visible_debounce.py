@@ -8,6 +8,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 MESSENGER = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger"
 STORE = MESSENGER / "ProxyRuntimeStateStore.java"
+REDUCER = MESSENGER / "ProxyEventReducer.java"
+VISIBLE_STORE = MESSENGER / "ProxyVisibleStateStore.java"
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
 RUNTIME_LOG_VERIFIER = ROOT / "Tools/verify_mtproxy_runtime_logs.py"
 
@@ -135,19 +137,21 @@ def run_runtime_log_checks(failures: list[str]) -> None:
 def main() -> int:
     failures: list[str] = []
     store = read(STORE)
+    reducer = read(REDUCER)
+    visible_store = read(VISIBLE_STORE)
     analyzer = read(ANALYZER)
-    on_native_stage = method_body(store, "public static Decision onNativeStage")
-    schedule_helper = method_body(store, "private static void scheduleDnsVisiblePhase")
-    promote_helper = method_body(store, "private static void promotePendingDnsVisiblePhase")
-    delay_helper = method_body(store, "private static boolean shouldDelayDnsVisiblePhase")
-    clear_helper = method_body(store, "private static void clearPendingDnsVisiblePhase")
+    on_native_stage = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
+    schedule_helper = method_body(visible_store, "static void scheduleDnsVisiblePhase")
+    promote_helper = method_body(visible_store, "private static void promotePendingDnsVisiblePhase")
+    delay_helper = method_body(visible_store, "static boolean shouldDelayDnsVisiblePhase")
+    clear_helper = method_body(visible_store, "static void clearPendingDnsVisiblePhase")
 
-    require("DNS_VISIBLE_DELAY_MS = 800L" in store, "runtime store must debounce visible DNS telemetry for 800ms", failures)
-    require("pendingDnsVisibleGeneration" in store, "runtime store must token pending DNS visible updates by generation", failures)
+    require("DNS_VISIBLE_DELAY_MS = 800L" in visible_store, "visible state store must debounce visible DNS telemetry for 800ms", failures)
+    require("pendingDnsVisibleGeneration" in visible_store, "visible state store must token pending DNS visible updates by generation", failures)
     require(
         delay_helper
         and all(f"ProxyCheckDiagnostics.{constant}" in delay_helper for _, constant in DNS_TELEMETRY_PHASES),
-        "runtime store must identify host_resolve_start and dns_coalesce_wait as delayed DNS telemetry",
+        "visible state store must identify host_resolve_start and dns_coalesce_wait as delayed DNS telemetry",
         failures,
     )
     require(
@@ -157,32 +161,32 @@ def main() -> int:
         and promote_helper
         and "ProxyStatusMirror.mirrorVisiblePhase" in promote_helper
         and "decision=visible_delayed_dns" in promote_helper,
-        "runtime store must schedule a delayed visible DNS write instead of mirroring immediately",
+        "visible state store must schedule a delayed visible DNS write instead of mirroring immediately",
         failures,
     )
     require(
         clear_helper
         and "pendingDnsVisibleGeneration++" in clear_helper
         and "pendingDnsVisibleEndpointKey" in clear_helper,
-        "runtime store must clear stale pending DNS visible writes when a later endpoint event arrives",
+        "visible state store must clear stale pending DNS visible writes when a later endpoint event arrives",
         failures,
     )
     for phase, constant in DNS_TELEMETRY_PHASES:
         require(
-            f"ProxyCheckDiagnostics.{constant}" in store
-            and f"decision=telemetry_only" in store,
+            f"ProxyCheckDiagnostics.{constant}" in visible_store
+            and f"decision=telemetry_only" in reducer,
             f"{phase} must be logged as telemetry_only before delayed visible promotion",
             failures,
         )
 
-    delay_idx = on_native_stage.find("shouldDelayDnsVisiblePhase(event.phase)")
+    delay_idx = on_native_stage.find("ProxyVisibleStateStore.shouldDelayDnsVisiblePhase(event.phase)")
     dns_connection_hold_idx = on_native_stage.find("shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)")
     visible_write_idx = on_native_stage.find("if (selectedAccountStage && ProxyPhasePolicy.canOverwriteVisible(event.phase))")
     require(
         delay_idx >= 0
         and visible_write_idx >= 0
         and delay_idx < visible_write_idx
-        and 'return new Decision("telemetry_only"' in on_native_stage,
+        and 'return new ProxyRuntimeStateStore.Decision("telemetry_only"' in on_native_stage,
         "DNS telemetry debounce must run before the generic visible mirror branch",
         failures,
     )
@@ -192,7 +196,7 @@ def main() -> int:
         and dns_connection_hold_idx < visible_write_idx
         and "ProxyCheckDiagnostics.CONNECTION_NOT_STARTED" in store
         and "previous_dns_outage" in store
-        and 'return new Decision("telemetry_only", event.phase, event.endpointKey, false, false, false)' in on_native_stage,
+        and 'return new ProxyRuntimeStateStore.Decision("telemetry_only", event.phase, event.endpointKey, false, false, false)' in on_native_stage,
         "connection_not_started after a DNS outage/resolve failure must stay telemetry_only before visible mirror/backoff/rotation",
         failures,
     )

@@ -37,8 +37,12 @@ def main() -> int:
     manager = read("TMessagesProj/jni/tgnet/ConnectionsManager.cpp")
     manager_h = read("TMessagesProj/jni/tgnet/ConnectionsManager.h")
     endpoint_policy = read("TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp")
+    shaper = read("TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp")
+    recovery_policy = read("TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp")
+    adaptive_policy = read("TMessagesProj/jni/tgnet/MtProxyAdaptivePolicy.cpp")
     phase_policy = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyPhasePolicy.java")
     runtime_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyRuntimeStateStore.java")
+    visible_store = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyVisibleStateStore.java")
     diagnostics = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java")
     endpoint_key = read("TMessagesProj/src/main/java/org/telegram/messenger/ProxyEndpointKey.java")
     all_checks = read("Tools/check_mtproxy_all.py")
@@ -86,6 +90,37 @@ def main() -> int:
         "native socket must mark data-path proof only after first transport/appdata receive",
         failures,
     )
+    require(
+        "PostHandshakeNoAppData" in shaper
+        and "MtProxyPhase::PostHandshakeNoAppdata" in shaper
+        and "post_handshake_shaping_backoff" in shaper
+        and "PostHandshakeNoAppData" in recovery_policy
+        and "PostHandshakeShapingBackoff" in recovery_policy,
+        "post_handshake_no_appdata must feed the data-path shaper and recovery policy",
+        failures,
+    )
+    parser_variant_body = slice_between(adaptive_policy, "static bool serverHelloParserVariantAllowed", "uint32_t MtProxyAdaptivePolicy::sniVariantMask")
+    require(
+        "post_handshake_no_appdata" not in parser_variant_body
+        and "PostHandshakeNoAppData" not in parser_variant_body
+        and "PostHandshakeShapingBackoff" not in parser_variant_body,
+        "post_handshake_no_appdata must not be part of parser variant expansion",
+        failures,
+    )
+    require(
+        'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in socket
+        and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in socket
+        and "publishMtProxySocketObservation(observation)" in socket,
+        "first_tls_app_recv must remain the FakeTLS usable success marker",
+        failures,
+    )
+    require(
+        "recordMtProxyEndpointHandshakeOk(\"server_hello_hmac_ok\")" in socket
+        and "setTransportState(TransportState::MtprotoReady, \"server_hello_hmac_ok\")" in socket
+        and "recordMtProxyEndpointDataPathSuccess(\"server_hello_hmac_ok\")" not in socket,
+        "server_hello_hmac_ok must remain only a handshake milestone, not data-path success",
+        failures,
+    )
 
     close_body = slice_between(socket, "void ConnectionSocket::closeSocket", "void ConnectionSocket::onEvent")
     require(
@@ -128,10 +163,11 @@ def main() -> int:
     )
 
     require(
-        "private static boolean isMtProxy" in runtime_store
-        and "return ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now);" in slice_between(runtime_store, "private static boolean isCurrentProxyUsable", "public static boolean isEndpointRotatedAway")
-        and "reason=mtproxy_wait_data_path" in runtime_store,
-        "runtime store must not treat generic connected state as MTProxy usable without data-path success",
+        "static boolean isCurrentProxyUsable" in visible_store
+        and "private static boolean isMtProxy" in visible_store
+        and "return ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now);" in slice_between(visible_store, "static boolean isCurrentProxyUsable", "static boolean shouldHoldLivePhaseByUsableSuccess")
+        and "reason=mtproxy_wait_data_path" in visible_store,
+        "visible state store must not treat generic connected state as MTProxy usable without data-path success",
         failures,
     )
     require(

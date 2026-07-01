@@ -24,6 +24,11 @@ MTPROXY_OPTIONS = ROOT / "TMessagesProj/jni/tgnet/MtProxyOptions.h"
 MTPROXY_PHASE_CONTRACT_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyPhaseContract.h"
 MTPROXY_SECRET_DOMAIN_H = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.h"
 MTPROXY_SECRET_DOMAIN_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxySecretDomain.cpp"
+MTPROXY_SERVER_FLIGHT_PARSER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.h"
+MTPROXY_SERVER_FLIGHT_PARSER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyServerFlightParser.cpp"
+MTPROXY_HANDSHAKE_SCHEDULER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.h"
+MTPROXY_HANDSHAKE_SCHEDULER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
+MTPROXY_DATA_PATH_SHAPER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 CM_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
 CM_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
@@ -61,6 +66,11 @@ def main() -> int:
     phase_contract = MTPROXY_PHASE_CONTRACT_H.read_text(encoding="utf-8")
     secret_domain_h = MTPROXY_SECRET_DOMAIN_H.read_text(encoding="utf-8")
     secret_domain_cpp = MTPROXY_SECRET_DOMAIN_CPP.read_text(encoding="utf-8")
+    server_flight_parser_h = MTPROXY_SERVER_FLIGHT_PARSER_H.read_text(encoding="utf-8")
+    server_flight_parser_cpp = MTPROXY_SERVER_FLIGHT_PARSER_CPP.read_text(encoding="utf-8")
+    handshake_scheduler_h = MTPROXY_HANDSHAKE_SCHEDULER_H.read_text(encoding="utf-8")
+    handshake_scheduler_cpp = MTPROXY_HANDSHAKE_SCHEDULER_CPP.read_text(encoding="utf-8")
+    data_path_shaper_cpp = MTPROXY_DATA_PATH_SHAPER_CPP.read_text(encoding="utf-8")
     cmake = CMAKE.read_text(encoding="utf-8")
     java = CM_JAVA.read_text(encoding="utf-8")
     manager_cpp = CM_CPP.read_text(encoding="utf-8")
@@ -371,9 +381,10 @@ def main() -> int:
         "ClientHello must not be sent through a single unchecked send()",
     )
     require(
-        "nextMtProxyTlsRecordPayloadSize" in cpp
-        and "uint32_t cap = 2878" in cpp
-        and "remaining > cap" in cpp,
+        "nextMtProxyTlsRecordPayloadSize" in data_path_shaper_cpp
+        and "uint32_t cap = 2878" in data_path_shaper_cpp
+        and "MtProxyRecordSizingDecision sizingDecision = nextMtProxyTlsRecordPayloadSize" in cpp
+        and "remaining > sizingDecision.payloadSize" in cpp,
         "wrapped data path must keep the original cap as runtime-off default and apply sizing only through the explicit helper",
     )
     require(
@@ -395,17 +406,20 @@ def main() -> int:
     )
     require(
         "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in cpp
-        and "mtProxyConnectionPatternUsesAdmission" in cpp
+        and "mtProxyHandshakeSchedulerUsesAdmission" in cpp
         and "admission_disabled" in cpp,
         "FakeTLS endpoint admission controller must be controlled by the runtime connection-pattern setting",
     )
     require(
-        "MtProxyHandshakeEndpointState" in cpp
-        and "proxyHandshakeSchedulerMutex" in cpp
-        and "activeHandshakes" in cpp
-        and "cooldownUntil" in cpp
-        and "queuedRequests" in cpp,
-        "FakeTLS startup must use an endpoint-level admission controller, not a single global jitter timestamp",
+        "MtProxyHandshakeEndpointState" in handshake_scheduler_cpp
+        and "proxyHandshakeSchedulerMutex" in handshake_scheduler_cpp
+        and "activeHandshakes" in handshake_scheduler_cpp
+        and "cooldownUntil" in handshake_scheduler_cpp
+        and "queuedRequests" in handshake_scheduler_cpp
+        and "MtProxyHandshakeAdmissionRequest" in handshake_scheduler_h
+        and "mtProxyHandshakeSchedulerAdmit" in cpp
+        and "proxyHandshakeSchedulerMutex" not in cpp,
+        "FakeTLS startup must use the extracted endpoint-level admission controller, not a single global jitter timestamp",
     )
     require(
         "lastProxyConnectTime" not in cpp
@@ -414,16 +428,17 @@ def main() -> int:
     )
     require(
         "setMtProxyHandshakePriority" in combined
-        and "mtProxyHandshakePriorityForConnectionType" in connection_cpp
+        and "mtProxyRequestClassForConnectionType" in connection_cpp
+        and "mtProxyHandshakePriorityForRequestClass" in connection_cpp
         and "ConnectionTypeGenericMedia" in connection_cpp
         and "ConnectionTypeProxy" in connection_cpp,
         "FakeTLS admission must receive MTProto connection priority before opening the socket",
     )
     require(
-        "MT_PROXY_HANDSHAKE_PRIORITY_BYPASS" in cpp
+        "MT_PROXY_HANDSHAKE_PRIORITY_BYPASS" in handshake_scheduler_h
         and "proxyHandshakeAdmissionPriority == MT_PROXY_HANDSHAKE_PRIORITY_BYPASS" in cpp
         and "case ConnectionTypeProxy:" in connection_cpp
-        and "return -1;" in connection_cpp,
+        and "mtProxyHandshakePriority = MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;" in connection_cpp,
         "Proxy checks must bypass hard FakeTLS admission queue to avoid false dead-proxy results",
     )
     require(
@@ -444,10 +459,10 @@ def main() -> int:
     )
     require(
         "MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED" not in cpp
-        and "MT_PROXY_HANDSHAKE_QUIET_FREEZE_COOLDOWN_MAX_MS" in cpp
-        and "MT_PROXY_HANDSHAKE_STRICT_FREEZE_COOLDOWN_MAX_MS" in cpp
-        and "mtProxyClampCooldown" in cpp
-        and "mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode)" in cpp
+        and "MT_PROXY_HANDSHAKE_QUIET_FREEZE_COOLDOWN_MAX_MS" in handshake_scheduler_cpp
+        and "MT_PROXY_HANDSHAKE_STRICT_FREEZE_COOLDOWN_MAX_MS" in handshake_scheduler_cpp
+        and "mtProxyClampCooldown" in handshake_scheduler_cpp
+        and "mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode)" in handshake_scheduler_cpp
         and "clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS" in cpp
         and "admission_freeze_cooldown" in cpp
         and "admission_freeze_observed" in cpp,
@@ -549,7 +564,13 @@ def main() -> int:
         "TLS pending-frame sends must refresh lastEventTime so active writes are not timed out as idle",
     )
     require(
-        "mtProxyVerifyServerHelloHmac" in cpp
+        "struct MtProxyServerFlightParseResult" in server_flight_parser_h
+        and "mtProxyParseServerHelloFlight" in server_flight_parser_cpp
+        and "mtProxyVerifyServerHelloHmac" in server_flight_parser_cpp
+        and "mtProxyVerifyServerHelloHmac" not in cpp
+        and "MtProxyServerHelloParseResult" not in cpp
+        and "MtProxyServerFlightParseResult parseResult = mtProxyParseServerHelloFlight" in cpp
+        and "tgnet/MtProxyServerFlightParser.cpp" in cmake
         and "TLS server hello hmac wait" in cpp
         and "TLS server hello wait for tail data" in cpp
         and "server_hello_hmac_timeout" in cpp,

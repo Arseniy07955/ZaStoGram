@@ -25,6 +25,36 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def method_body(text: str, signature: str) -> str:
+    start = text.find(signature)
+    if start == -1:
+        return ""
+    brace = text.find("{", start)
+    if brace == -1:
+        return ""
+    depth = 0
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return text[start:]
+
+
+def proxy_phase_cases(body: str) -> set[str]:
+    result: set[str] = set()
+    prefix = "case ProxyCheckDiagnostics."
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        result.add(stripped[len(prefix):].split(":", 1)[0])
+    return result
+
+
 def run_verifier(markers: str) -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
         handle.write(markers)
@@ -120,7 +150,8 @@ def verify_runtime_contract(failures: list[str]) -> None:
 
     good_profiles_hysteresis = run_verifier(
         base_log(
-            "06-30 13:20:40.000 proxy_control decision=held_by_failure_hysteresis source=native_stage origin=active_proxy account=0 phase=handshake_profiles_exhausted endpoint=fast2.mtproxy.zip:443:ee:wb.ru failures=1",
+            "06-30 13:20:40.000 proxy_control decision=backoff source=native_stage origin=active_proxy account=0 phase=handshake_profiles_exhausted evidence=no_bytes_after_client_hello endpoint=fast2.mtproxy.zip:443:ee:wb.ru failures=1",
+            "06-30 13:20:40.010 proxy_control decision=held_by_failure_hysteresis source=native_stage origin=active_proxy account=0 phase=handshake_profiles_exhausted evidence=no_bytes_after_client_hello endpoint=fast2.mtproxy.zip:443:ee:wb.ru failures=1",
         )
     )
     require(
@@ -133,7 +164,7 @@ def verify_runtime_contract(failures: list[str]) -> None:
         base_log(
             "06-30 13:20:40.000 proxy_control decision=terminal_proxy_config_unsupported source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru active_selected=1",
             "06-30 13:20:40.010 proxy_control decision=cancel_endpoint_attempts source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru proxy_check_cancelled=0 native_cancelled=3",
-            "06-30 13:20:40.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
+            "06-30 13:20:40.020 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=secret_parse_invalid_domain evidence=config_invalid_secret endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
             "06-30 13:20:40.030 proxy_control decision=ignored_cancelled_generation source=native_stage origin=active_proxy account=0 phase=ignored_cancelled_generation endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
         )
     )
@@ -172,6 +203,8 @@ def main() -> int:
     failures: list[str] = []
     event = read(MESSENGER / "ProxyConnectionEvent.java")
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
+    reducer = read(MESSENGER / "ProxyEventReducer.java")
+    visible = read(MESSENGER / "ProxyVisibleStateStore.java")
     health = read(MESSENGER / "ProxyHealthStore.java")
     phase_policy = read(MESSENGER / "ProxyPhasePolicy.java")
     diagnostics = read(MESSENGER / "ProxyCheckDiagnostics.java")
@@ -197,10 +230,21 @@ def main() -> int:
     require("origin" in wrapper and "probeKey" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V" in wrapper, "JNI proxy stage callback must carry origin and probe key", failures)
     require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin)" in defines, "native delegate must expose proxy stage origin and probe key", failures)
     require(
-        "if (!isActiveProxyEvent(event))" in runtime
-        and "updateProxyRowOnly" in runtime
-        and "active_origin_required" in runtime,
-        "ProxyRuntimeStateStore must route non-active proxy events to row-only handling before active visible/backoff policy",
+        "return ProxyEventReducer.reduce(event)" in runtime,
+        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        failures,
+    )
+    require(
+        "if (!isActiveProxyEvent(event))" in reducer
+        and "updateProxyRowOnly" in reducer
+        and "active_origin_required" in runtime + reducer,
+        "ProxyEventReducer must route non-active proxy events to row-only handling before active visible/backoff policy",
+        failures,
+    )
+    require(
+        "DNS_VISIBLE_DELAY_MS" in visible
+        and "ProxyVisibleStateStore.scheduleDnsVisiblePhase" in reducer,
+        "ProxyVisibleStateStore must own DNS visible debounce while ProxyEventReducer schedules it",
         failures,
     )
     require(
@@ -219,6 +263,44 @@ def main() -> int:
     require("isOneShotTerminal" in phase_policy, "ProxyPhasePolicy must expose one-shot terminal verdicts", failures)
     require("terminal_quarantine" in runtime and "quarantineAndCancelEndpoint" in runtime, "runtime store must centralize terminal quarantine", failures)
     require("oneShotTerminal" in health or "isOneShotTerminal" in health, "health store must bypass hysteresis for one-shot terminal phases", failures)
+    terminal_exact_cases = proxy_phase_cases(method_body(phase_policy, "private static boolean isTerminalExactConfigPhase"))
+    one_shot_terminal_cases = proxy_phase_cases(method_body(phase_policy, "public static boolean isOneShotTerminal"))
+    terminal_secret_cases = {"SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR", "SECRET_PARSE_INVALID_DOMAIN"}
+    require(
+        terminal_exact_cases == terminal_secret_cases
+        and one_shot_terminal_cases == terminal_secret_cases,
+        "terminal exact config and one-shot terminal Java verdicts must be limited to invalid secret/domain phases",
+        failures,
+    )
+    evidence_body = method_body(phase_policy, "public static String evidenceForPhase")
+    require(
+        "case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:" in evidence_body
+        and "EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO" in evidence_body
+        and "case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:" in evidence_body
+        and "EVIDENCE_POST_HANDSHAKE_NO_APP_DATA" in evidence_body
+        and "case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:" in evidence_body
+        and "EVIDENCE_CONFIG_INVALID_SECRET" in evidence_body,
+        "ProxyPhasePolicy must expose typed failure evidence names for Java recovery logs",
+        failures,
+    )
+    reducer_body = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
+    require(
+        "ProxyPhasePolicy.evidenceForPhase(event.phase)" in reducer
+        and "decision=backoff" in reducer_body
+        and " evidence=\" + evidence" in reducer_body
+        and "decision=held_by_failure_hysteresis" in reducer_body
+        and "decision=rotation_trigger" in reducer_body
+        and " failures=\" + failure.rotationFailures" in reducer_body,
+        "ProxyEventReducer must log evidence-aware backoff, hysteresis, and rotation-trigger decisions",
+        failures,
+    )
+    require(
+        "ProxyPhasePolicy.evidenceForPhase(state.lastDiagnostic)" in health
+        and " evidence=\" + evidence" in health
+        and "decision=backoff" in health,
+        "ProxyHealthStore backoff log must include typed evidence",
+        failures,
+    )
 
     require("cancelEndpointAttempts" in scheduler and "cancel_endpoint_attempts" in runtime, "Java scheduler/runtime must cancel endpoint attempts and log it", failures)
     require("cancelProxyEndpointAttemptsForAllAccounts" in java_connections and "native_cancelProxyEndpointAttempts" in java_connections, "Java ConnectionsManager must expose endpoint cancellation", failures)

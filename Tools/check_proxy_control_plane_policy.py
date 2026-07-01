@@ -14,6 +14,8 @@ ENDPOINT_KEY = MESSENGER / "ProxyEndpointKey.java"
 EVENT = MESSENGER / "ProxyConnectionEvent.java"
 POLICY = MESSENGER / "ProxyPhasePolicy.java"
 STORE = MESSENGER / "ProxyRuntimeStateStore.java"
+REDUCER = MESSENGER / "ProxyEventReducer.java"
+VISIBLE_STORE = MESSENGER / "ProxyVisibleStateStore.java"
 HEALTH = MESSENGER / "ProxyHealthStore.java"
 STATUS = MESSENGER / "ProxyStatusMirror.java"
 SCHEDULER = MESSENGER / "ProxyCheckScheduler.java"
@@ -86,6 +88,8 @@ def main() -> int:
     event = require_file(EVENT, failures)
     policy = require_file(POLICY, failures)
     store = require_file(STORE, failures)
+    reducer = require_file(REDUCER, failures)
+    visible_store = require_file(VISIBLE_STORE, failures)
     health = require_file(HEALTH, failures)
     status = require_file(STATUS, failures)
     scheduler = read(SCHEDULER)
@@ -159,13 +163,14 @@ def main() -> int:
     require(health, "USABLE_SUCCESS_HOLD_MS", "ProxyHealthStore must keep a short usable-success hold window", failures)
     require(status, "final class ProxyStatusMirror", "ProxyStatusMirror must own runtime ProxyInfo UI-state mirroring", failures)
     require_not(store, "HashMap<String, EndpointState> endpointStates", "ProxyRuntimeStateStore facade must not own endpoint health state directly", failures)
-    require(store, "held_by_usable_success", "usable success followed by sibling failure must be held/shadowed", failures)
+    runtime_decisions = store + "\n" + reducer + "\n" + visible_store
+    require(runtime_decisions, "held_by_usable_success", "usable success followed by sibling failure must be held/shadowed", failures)
     require(health, "decision=backoff", "terminal failures without usable success must record backoff decisions in health store", failures)
-    require(store, "decision=ignored_stale_endpoint", "stale endpoint/secret native events must be ignored", failures)
-    require(store, "decision=visible_only", "non-terminal live stages should be visible-only decisions", failures)
-    require(store, "shouldKeepLifecycleFailureTelemetryOnly", "lifecycle/screen-off handshake aborts must stay telemetry-only", failures)
-    require(store, "BACKGROUND_HANDSHAKE_ABORTED", "background_handshake_aborted must not overwrite visible proxy status", failures)
-    require(store, "decision=rotation_trigger", "rotation-triggering failures must be explicit decisions", failures)
+    require(runtime_decisions, "decision=ignored_stale_endpoint", "stale endpoint/secret native events must be ignored", failures)
+    require(runtime_decisions, "decision=visible_only", "non-terminal live stages should be visible-only decisions", failures)
+    require(reducer, "shouldKeepLifecycleFailureTelemetryOnly", "lifecycle/screen-off handshake aborts must stay telemetry-only", failures)
+    require(reducer, "BACKGROUND_HANDSHAKE_ABORTED", "background_handshake_aborted must not overwrite visible proxy status", failures)
+    require(runtime_decisions, "decision=rotation_trigger", "rotation-triggering failures must be explicit decisions", failures)
     require(health, "clearEndpointBackoff", "usable success must clear exact and network endpoint backoff", failures)
     require(store, "shouldScheduleFallback", "rotation must ask the store whether a fallback should be scheduled", failures)
     require(store, "isSwitchableCandidate", "rotation candidate filtering must be delegated to the store", failures)

@@ -12,6 +12,8 @@ FILES = {
     "socket": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp",
     "endpoint_policy": ROOT / "TMessagesProj/jni/tgnet/MtProxyEndpointPolicy.cpp",
     "probe_coordinator": ROOT / "TMessagesProj/jni/tgnet/MtProxyProbeCoordinator.cpp",
+    "recovery_policy": ROOT / "TMessagesProj/jni/tgnet/MtProxyRecoveryPolicy.cpp",
+    "data_path_shaper": ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp",
     "socket_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h",
     "machine_header": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h",
     "connection": ROOT / "TMessagesProj/jni/tgnet/Connection.cpp",
@@ -52,6 +54,8 @@ def main():
     socket = read("socket")
     endpoint_policy = read("endpoint_policy")
     probe_coordinator = read("probe_coordinator")
+    recovery_policy = read("recovery_policy")
+    data_path_shaper = read("data_path_shaper")
     header = read("socket_header")
     machine_header = read("machine_header")
     socket_state_header = header + "\n" + machine_header
@@ -203,7 +207,8 @@ def main():
     require(
         "proxyHandshakeAdmissionQueuePublished" in admission_body
         and "admission_queue_wait" in admission_body
-        and "if (!proxyHandshakeAdmissionQueuePublished)" in admission_body,
+        and "request.queueAlreadyPublished = proxyHandshakeAdmissionQueuePublished" in admission_body
+        and "if (decision.publishQueue)" in admission_body,
         "admission queue must publish the UI wait state once and log repeated waits separately",
     )
     close_start = socket.find("void ConnectionSocket::closeSocket")
@@ -485,13 +490,13 @@ def main():
         and "faketls_server_hello_wait_timeout" in recipe_body
         and "server_closed_after_client_hello" in recipe_body
         and "client_hello_sent_no_server_hello" in recipe_body
-        and "server_hello_hmac_mismatch" in recipe_body
-        and "post_handshake_no_appdata" in recipe_body,
-        "phase-adaptive recipe must react only to FakeTLS/post-ClientHello semantic failures",
+        and "server_hello_hmac_mismatch" in recipe_body,
+        "phase-adaptive recipe must react only to FakeTLS post-ClientHello handshake failures",
     )
     require(
         'diagnostic == "tcp_not_connected"' in recipe_body
         and "return false;" in recipe_body
+        and "post_handshake_no_appdata" not in recipe_body
         and "host_resolve_failed" not in recipe_body
         and "host_resolve_timeout" not in recipe_body
         and "mtproxy_packet_sent_no_response" not in recipe_body
@@ -499,6 +504,10 @@ def main():
         and "peer_closed_after_client_hello" not in recipe_body
         and "tcp_connected_no_pong" not in recipe_body,
         "phase-adaptive recipe must not react to DNS/TCP/plain-dd failures where JA4/ClientHello did not help",
+    )
+    require(
+        "MtProxyRecoveryActionKind::PostHandshakeShapingBackoff" in recovery_policy,
+        "post-handshake no-appdata must be handled by recovery shaping/backoff, not the recipe cursor ladder",
     )
     failure_start = socket.find("void ConnectionSocket::recordMtProxyEndpointFailure")
     failure_end = socket.find("void ConnectionSocket::recordMtProxyEndpointHandshakeOk", failure_start)
@@ -526,8 +535,10 @@ def main():
         "failure cooldown and FakeTLS recipe must use separate endpoint-policy and probe-coordinator state entries",
     )
     require(
-        "currentSecretIsFakeTls && MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure_body,
-        "recipe level must only advance for FakeTLS connections, never for dd/legacy MTProxy",
+        "currentSecretIsFakeTls" in failure_body
+        and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure_body
+        and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure_body,
+        "recipe level must only advance for FakeTLS connections with cursor-advancing recovery actions, never for dd/legacy MTProxy",
     )
     success_start = socket.find("void ConnectionSocket::recordMtProxyEndpointDataPathSuccess")
     success_end = socket.find("bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress", success_start)
@@ -610,7 +621,9 @@ def main():
         "post-handshake no-appdata recipe must escalate data shaping instead of treating it as a ClientHello-only failure",
     )
     require(
-        "mtProxyDataAwareIptDelayMs" in socket and "outgoingByteStream->hasData()" in socket,
+        "mtProxyDataAwareIptDelayMs" in data_path_shaper
+        and "input.hasPendingTlsFrame || !input.hasOutgoingData" in data_path_shaper
+        and "timingInput.hasOutgoingData = outgoingByteStream->hasData();" in socket,
         "post-handshake timing must be data-aware, not idle-thread sleeping",
     )
 

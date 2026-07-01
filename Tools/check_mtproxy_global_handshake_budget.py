@@ -5,6 +5,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
+SCHEDULER = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.cpp"
+SCHEDULER_HEADER = ROOT / "TMessagesProj/jni/tgnet/MtProxyHandshakeScheduler.h"
+CONNECTION = ROOT / "TMessagesProj/jni/tgnet/Connection.cpp"
+DEFINES = ROOT / "TMessagesProj/jni/tgnet/Defines.h"
+CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
 
 def read(path: Path) -> str:
@@ -25,29 +30,104 @@ def slice_between(source: str, start: str, end: str) -> str:
     return source[start_idx:end_idx]
 
 
+def slice_from(source: str, start: str) -> str:
+    start_idx = source.find(start)
+    require(start_idx >= 0, f"missing start marker: {start}")
+    return source[start_idx:]
+
+
 def main() -> None:
     socket = read(SOCKET)
+    scheduler = read(SCHEDULER)
+    scheduler_header = read(SCHEDULER_HEADER)
+    connection = read(CONNECTION)
+    defines = read(DEFINES)
+    cmake = read(CMAKE)
     scheduler_helpers = slice_between(
-        socket,
-        "struct MtProxyHandshakeQueuedRequest",
-        "static void mtProxyClampCooldown",
+        scheduler,
+        "static pthread_mutex_t proxyHandshakeSchedulerMutex",
+        "MtProxyHandshakeAdmissionDecision mtProxyHandshakeSchedulerAdmit",
     )
-    admission = slice_between(
+    scheduler_admission = slice_between(
+        scheduler,
+        "MtProxyHandshakeAdmissionDecision mtProxyHandshakeSchedulerAdmit",
+        "MtProxyHandshakeReleaseDecision mtProxyHandshakeSchedulerRelease",
+    )
+    scheduler_release = slice_from(
+        scheduler,
+        "MtProxyHandshakeReleaseDecision mtProxyHandshakeSchedulerRelease",
+    )
+    socket_admission = slice_between(
         socket,
         "bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded",
         "void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer",
     )
-    release = slice_between(
+    socket_release = slice_between(
         socket,
         "void ConnectionSocket::releaseProxyHandshakeAdmission",
         "bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded",
     )
 
     require(
-        "MT_PROXY_HANDSHAKE_GLOBAL_BROWSER_ACTIVE_LIMIT = 2" in socket
-        and "MT_PROXY_HANDSHAKE_GLOBAL_QUIET_ACTIVE_LIMIT = 1" in socket
-        and "MT_PROXY_HANDSHAKE_GLOBAL_STRICT_ACTIVE_LIMIT = 1" in socket,
-        "global MTProxy handshake budget must define mode-specific app-wide active limits",
+        "tgnet/MtProxyHandshakeScheduler.cpp" in cmake,
+        "native build must compile MtProxyHandshakeScheduler.cpp",
+    )
+    require(
+        "enum class MtProxyRequestClass : uint8_t" in scheduler_header
+        and "Generic" in scheduler_header
+        and "Media" in scheduler_header
+        and "Push" in scheduler_header
+        and "Download" in scheduler_header
+        and "Upload" in scheduler_header
+        and "ProxyCheck" in scheduler_header
+        and "mtProxyHandshakePriorityForRequestClass" in scheduler_header
+        and "mtProxyRequestClassForPriority" in scheduler_header
+        and "mtProxyRequestClassName" in scheduler_header,
+        "scheduler API must name MTProxy request classes instead of exposing only raw priority integers",
+    )
+    require(
+        "MtProxyHandshakeAdmissionRequest" in scheduler_header
+        and "ConnectionSocket *socket = nullptr;" in scheduler_header
+        and "std::string key;" in scheduler_header
+        and "uint32_t generation = 0;" in scheduler_header
+        and "MtProxyRequestClass requestClass = MtProxyRequestClass::Generic;" in scheduler_header
+        and "int32_t priority = 0;" in scheduler_header
+        and "int32_t timerMode = 0;" in scheduler_header
+        and "int32_t connectionPatternMode = 0;" in scheduler_header
+        and "bool ipv6 = false;" in scheduler_header
+        and "int64_t now = 0;" in scheduler_header
+        and "MtProxyHandshakeAdmissionDecision" in scheduler_header
+        and "bool queued = false;" in scheduler_header
+        and "bool granted = false;" in scheduler_header
+        and "bool publishQueue = false;" in scheduler_header
+        and "uint32_t delayMs = 0;" in scheduler_header
+        and "int32_t endpointActive = 0;" in scheduler_header
+        and "int32_t endpointLimit = 0;" in scheduler_header
+        and "int32_t globalActive = 0;" in scheduler_header
+        and "int32_t globalLimit = 0;" in scheduler_header
+        and "int64_t cooldownRemainingMs = 0;" in scheduler_header,
+        "scheduler facade must expose typed admission request/decision structs",
+    )
+    require(
+        "proxyHandshakeSchedulerMutex" not in socket
+        and "proxyHandshakeEndpoints" not in socket
+        and "proxyHandshakeGlobal" not in socket
+        and "struct MtProxyHandshakeQueuedRequest" not in socket
+        and "struct MtProxyHandshakeEndpointState" not in socket
+        and "mtProxyHandshakeActiveLimit" not in socket
+        and "mtProxyHandshakeGlobalActiveLimit" not in socket
+        and "mtProxyTakeNextQueuedRequestGlobalLocked" not in socket
+        and "mtProxyRecordHandshakeSuccess" not in socket,
+        "ConnectionSocket must not own global handshake scheduler state or policy helpers",
+    )
+    require(
+        "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT 2" in defines
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER 2" in defines
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET 1" in defines
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT 1" in defines
+        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD 1" in defines
+        and "MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE 2" in defines,
+        "startup handshake fanout limits must live in Defines.h so they stay separate from established connection counts",
     )
     require(
         "struct MtProxyHandshakeGlobalState" in scheduler_helpers
@@ -58,10 +138,27 @@ def main() -> None:
     )
     require(
         "mtProxyHandshakeGlobalActiveLimit" in scheduler_helpers
-        and "MT_PROXY_HANDSHAKE_GLOBAL_BROWSER_ACTIVE_LIMIT" in scheduler_helpers
-        and "MT_PROXY_HANDSHAKE_GLOBAL_QUIET_ACTIVE_LIMIT" in scheduler_helpers
-        and "MT_PROXY_HANDSHAKE_GLOBAL_STRICT_ACTIVE_LIMIT" in scheduler_helpers,
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_SOFT" in scheduler_helpers
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_BROWSER" in scheduler_helpers
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_QUIET" in scheduler_helpers
+        and "MT_PROXY_STARTUP_GLOBAL_HANDSHAKES_STRICT" in scheduler_helpers,
         "global active limit helper must be mode-aware",
+    )
+    require(
+        "mtProxyHandshakeEndpointHasRecentSuccess" in scheduler_helpers
+        and "return MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_COLD;" in scheduler_helpers
+        and "return MT_PROXY_STARTUP_ENDPOINT_HANDSHAKES_USABLE;" in scheduler_helpers
+        and "MT_PROXY_HANDSHAKE_SOFT_ACTIVE_LIMIT" not in scheduler,
+        "endpoint active limit must be 1 until recent usable success explicitly allows 2",
+    )
+    require(
+        "activeGenericPushHandshakes" in scheduler_helpers
+        and "mtProxyHandshakeIsGenericOrPush" in scheduler_helpers
+        and "mtProxyHandshakeIsHeavyRequestClass" in scheduler_helpers
+        and "mtProxyHandshakeHeavyBlockedBeforeUsable" in scheduler_helpers
+        and "activeGenericPushHandshakes > 0" in scheduler_helpers
+        and "mtProxyHandshakeHasGenericOrPushQueuedGlobal" in scheduler_helpers,
+        "heavy request classes must wait behind generic/push while the endpoint is not yet usable",
     )
     require(
         "mtProxyHandshakeGlobalSpacingDelay" in scheduler_helpers
@@ -83,34 +180,48 @@ def main() -> None:
         "release must dequeue the next best request globally, not only from the same endpoint",
     )
     require(
-        "globalActiveLimit = mtProxyHandshakeGlobalActiveLimit" in admission
-        and "globalLimitReached = proxyHandshakeGlobal.activeHandshakes >= globalActiveLimit" in admission
-        and "globalLimitReached || cooldownBlocks || state.activeHandshakes >= endpointActiveLimit" in admission,
-        "admission must queue when the app-wide handshake budget is full",
+        "globalLimit = mtProxyHandshakeGlobalActiveLimit" in scheduler_admission
+        and "globalLimitReached = proxyHandshakeGlobal.activeHandshakes >= globalLimit" in scheduler_admission
+        and "globalLimitReached || cooldownBlocks || state.activeHandshakes >= endpointLimit" in scheduler_admission,
+        "scheduler admission must queue when the app-wide handshake budget is full",
     )
     require(
-        "mtProxyHandshakeHasHigherPriorityQueuedGlobal(proxyHandshakeAdmissionPriority)" in admission
-        and "proxyHandshakeGlobal.activeHandshakes++" in admission
-        and "mtProxyRecordGlobalHandshakeGrant(now, delay)" in admission,
-        "immediate grants must reserve and record an app-wide slot",
+        "mtProxyHandshakeHasHigherPriorityQueuedGlobal(request.priority)" in scheduler_admission
+        and "proxyHandshakeGlobal.activeHandshakes++" in scheduler_admission
+        and "mtProxyRecordGlobalHandshakeGrant(request.now, decision.delayMs)" in scheduler_admission,
+        "scheduler immediate grants must reserve and record an app-wide slot",
     )
     require(
-        "global_active=%d" in admission
-        and "global_limit=%d" in admission
-        and "global_active=%d" in release
-        and "global_limit=%d" in release,
+        "request.requestClass = mtProxyRequestClassForPriority(proxyHandshakeAdmissionPriority);" in socket_admission
+        and "request_class=%s" in socket_admission
+        and "MtProxyRequestClass requestClass = request.requestClass;" in scheduler_admission
+        and "mtProxyRequestClassForConnectionType" in connection
+        and "mtProxyHandshakePriorityForRequestClass(mtProxyRequestClassForConnectionType(connectionType))" in connection,
+        "Connection.cpp and ConnectionSocket must feed typed request class into scheduler admission while preserving priority ordering",
+    )
+    require(
+        "mtProxyHandshakeSchedulerAdmit(request)" in socket_admission
+        and "decision.queued" in socket_admission
+        and "decision.granted" in socket_admission
+        and "global_active=%d" in socket_admission
+        and "global_limit=%d" in socket_admission
+        and "mtProxyHandshakeSchedulerRelease(releaseRequest)" in socket_release
+        and "global_active=%d" in socket_release
+        and "global_limit=%d" in socket_release,
         "startup diagnostics must expose global active/limit budget decisions",
     )
     require(
-        "if (wasActive && proxyHandshakeGlobal.activeHandshakes > 0)" in release
-        and "proxyHandshakeGlobal.activeHandshakes--" in release,
-        "release must return an app-wide slot exactly once",
+        "if (request.wasActive && proxyHandshakeGlobal.activeHandshakes > 0)" in scheduler_release
+        and "proxyHandshakeGlobal.activeHandshakes--" in scheduler_release,
+        "scheduler release must return an app-wide slot exactly once",
     )
     require(
-        "mtProxyTakeNextQueuedRequestGlobalLocked(now, connectionPatternMode, nextRequest, nextRequestKey)" in release
-        and "MtProxyHandshakeEndpointState &nextState = proxyHandshakeEndpoints[nextRequestKey]" in release
-        and "mtProxyRecordGlobalHandshakeGrant(now, nextGrantDelay)" in release,
-        "release must grant the next queued handshake across all accounts/endpoints",
+        "mtProxyTakeNextQueuedRequestGlobalLocked(request.now, mode, decision.nextRequest)" in scheduler_release
+        and "MtProxyHandshakeEndpointState &nextState = proxyHandshakeEndpoints[decision.nextRequest.key]" in scheduler_release
+        and "mtProxyRecordGlobalHandshakeGrant(request.now, decision.nextRequest.delayMs)" in scheduler_release
+        and "admission_dequeue_global" in socket_release
+        and "grantProxyHandshakeAdmission" in socket_release,
+        "scheduler release must grant the next queued handshake across all accounts/endpoints",
     )
 
     print("MTProxy global handshake budget guard passed.")

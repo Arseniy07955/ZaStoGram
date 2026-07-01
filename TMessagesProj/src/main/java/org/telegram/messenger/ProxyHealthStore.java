@@ -319,7 +319,8 @@ final class ProxyHealthStore {
         if (rotationAllowed) {
             state.lifecycle = EndpointLifecycle.QUARANTINED;
         }
-        logControl("decision=backoff endpoint=" + ProxyEndpointKey.endpoint(proxyInfo) + " wait_ms=" + backoff + " failures=" + state.consecutiveFailures + " rotation_failures=" + state.rotationFailures + " rotation_allowed=" + rotationAllowed + " phase=" + state.lastDiagnostic + " source=" + source);
+        String evidence = ProxyPhasePolicy.evidenceForPhase(state.lastDiagnostic);
+        logControl("decision=backoff phase=" + state.lastDiagnostic + " evidence=" + evidence + " endpoint=" + ProxyEndpointKey.endpoint(proxyInfo) + " wait_ms=" + backoff + " failures=" + state.consecutiveFailures + " rotation_failures=" + state.rotationFailures + " rotation_allowed=" + rotationAllowed + " source=" + source);
         return new EndpointFailureResult(state.lastDiagnostic, state.consecutiveFailures, state.rotationFailures, rotationAllowed, true);
     }
 

@@ -13,12 +13,17 @@ MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 MACHINE_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocketStateMachine.h"
+SHAPER_H = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.h"
+SHAPER_CPP = ROOT / "TMessagesProj/jni/tgnet/MtProxyDataPathShaper.cpp"
+CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 PROXY_CHECK = ROOT / "TMessagesProj/jni/tgnet/ProxyCheckInfo.h"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
 
 
 def text(path: Path) -> str:
+    if not path.exists():
+        return ""
     return path.read_text(encoding="utf-8", errors="replace")
 
 
@@ -37,6 +42,9 @@ def main() -> None:
     manager_h = text(MANAGER_H)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    shaper_h = text(SHAPER_H)
+    shaper_cpp = text(SHAPER_CPP)
+    cmake = text(CMAKE)
     socket_state = socket_h + "\n" + text(MACHINE_H) + "\n" + socket_cpp
     proxy_check = text(PROXY_CHECK)
 
@@ -97,15 +105,40 @@ def main() -> None:
         "currentRecordSizingMode" in socket_state
         and "currentTimingMode" in socket_state
         and "mtproxyTlsFrameCompletedCount" in socket_state
-        and "nextMtProxyTlsRecordPayloadSize" in socket_cpp
+        and "nextMtProxyTlsRecordPayloadSize" in shaper_cpp
         and "scheduleMtProxyDataTimingIfNeeded" in socket_cpp,
-        "ConnectionSocket must apply record sizing and timing modes in the FakeTLS data path",
+        "MtProxyDataPathShaper must own record sizing policy while ConnectionSocket applies timing waits in the FakeTLS data path",
     )
     require(
-        "remaining > cap" in socket_cpp
+        "remaining > sizingDecision.payloadSize" in socket_cpp
         and "mtproxy_data record_sizing" in socket_cpp
         and "mtproxy_data timing_delay" in socket_cpp,
         "data-path layers must be logged and must not replace the pending TLS write queue",
+    )
+    require(
+        "MtProxyDataPathShaper.cpp" in cmake
+        and "MtProxyDataPathShaper.h" in socket_cpp,
+        "native build and ConnectionSocket must use the MtProxyDataPathShaper module",
+    )
+    require(
+        "struct MtProxyRecordSizingInput" in shaper_h
+        and "struct MtProxyStartupCoverPolicy" in shaper_h
+        and "struct MtProxyDataTimingDecision" in shaper_h
+        and "mtProxyEffectiveRecordSizingMode" in shaper_cpp
+        and "mtProxyEffectiveTimingMode" in shaper_cpp
+        and "mtProxyStartupCoverPolicy" in shaper_cpp
+        and "mtProxyDataTimingDecision" in shaper_cpp
+        and "mtProxyDataAwareIptDelayMs" in shaper_cpp,
+        "MtProxyDataPathShaper must own record sizing, timing, and startup-cover decisions",
+    )
+    require(
+        "uint32_t ConnectionSocket::nextMtProxyTlsRecordPayloadSize" not in socket_cpp
+        and "static uint32_t mtProxyDataAwareIptDelayMs" not in socket_cpp
+        and "MT_PROXY_STARTUP_COVER_SOFT_WINDOW_MS" not in socket_cpp
+        and "MT_PROXY_STARTUP_COVER_STRICT_WINDOW_MS" not in socket_cpp
+        and "currentStartupCoverMode == MT_PROXY_STARTUP_COVER_STRICT ? MT_PROXY_RECORD_SIZING_VARIED" not in socket_cpp
+        and "currentStartupCoverMode == MT_PROXY_STARTUP_COVER_STRICT ? MT_PROXY_TIMING_BALANCED" not in socket_cpp,
+        "ConnectionSocket must not regrow data-path shaping policy",
     )
     send_start = socket_cpp.find("bool ConnectionSocket::sendPendingTlsFrame()")
     send_end = socket_cpp.find("void ConnectionSocket::openConnection", send_start)
@@ -135,11 +168,13 @@ def main() -> None:
     )
     require(
         clear_pos < timing_pos
-        and "timingMode != MT_PROXY_TIMING_OFF && pendingTlsFrame == nullptr && outgoingByteStream->hasData()" in send_body,
+        and "MtProxyDataTimingDecision timingDecision = mtProxyDataTimingDecision" in send_body
+        and "timingDecision.shouldDelay" in send_body,
         "data-aware IPT must be scheduled only after a complete TLS frame, never while a partial TLS frame is pending",
     )
     require(
-        "timingMode == MT_PROXY_TIMING_OFF || pendingTlsFrame != nullptr || nextTlsFrameWriteTime == 0" in schedule_body,
+        "mtProxyDataTimingWaitDecision" in schedule_body
+        and "pendingTlsFrame != nullptr" in schedule_body,
         "data-aware IPT wait must be skipped while a TLS frame is pending or when no delay was scheduled",
     )
     for path in (STRINGS, STRINGS_RU):

@@ -83,7 +83,7 @@ final class ProxyRotationEngine {
             ProxyHealthStore.EndpointFailureResult failure = ProxyRuntimeStateStore.markEndpointFailure(currentProxy, ProxyCheckDiagnostics.CONNECTING_TIMEOUT);
             if (!failure.rotationAllowed) {
                 generation++;
-                return SwitchDecision.held("held_by_failure_hysteresis", 0);
+                return SwitchDecision.held("held_by_failure_hysteresis", 0, failure.diagnostic, ProxyPhasePolicy.evidenceForPhase(failure.diagnostic), failure.rotationFailures);
             }
         }
         return selectSwitchCandidate(currentProxy, now);
@@ -195,6 +195,9 @@ final class ProxyRotationEngine {
     static final class SwitchDecision {
         SharedConfig.ProxyInfo proxyInfo;
         String decision;
+        String phase;
+        String evidence;
+        int failures;
         long waitMs;
         boolean stale;
         boolean held;
@@ -216,6 +219,14 @@ final class ProxyRotationEngine {
         private static SwitchDecision held(String decision, long waitMs) {
             SwitchDecision result = noCandidate(decision, waitMs);
             result.held = true;
+            return result;
+        }
+
+        private static SwitchDecision held(String decision, long waitMs, String phase, String evidence, int failures) {
+            SwitchDecision result = held(decision, waitMs);
+            result.phase = phase;
+            result.evidence = evidence;
+            result.failures = failures;
             return result;
         }
 

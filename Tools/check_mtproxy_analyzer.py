@@ -11,6 +11,7 @@ from analyze_mtproxy_markers import Attempt
 
 ROOT = Path(__file__).resolve().parents[1]
 ANALYZER = ROOT / "Tools/analyze_mtproxy_markers.py"
+VERIFIER = ROOT / "Tools/verify_mtproxy_runtime_logs.py"
 SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
 
@@ -76,6 +77,35 @@ def check_phase_contract():
         not missing_startup_markers,
         f"MTProxy analyzer must preserve every native mtproxy_startup marker or mark it as directly handled: {missing_startup_markers}",
     )
+
+
+def run_verifier(markers: str) -> subprocess.CompletedProcess[str]:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
+        marker_path = Path(handle.name)
+        handle.write(markers)
+    try:
+        return subprocess.run(
+            [sys.executable, str(VERIFIER), str(marker_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    finally:
+        marker_path.unlink(missing_ok=True)
+
+
+def runtime_contract_log(*lines: str) -> str:
+    base = [
+        "logcat.txt:1: 06-30 13:20:30.000 connection(0x1) mtproxy_disconnect transport_state=closed epoll_registered=0 admission_active=0 tcp_gate_active=0",
+        "logcat.txt:2: 06-30 13:20:30.010 connection(0x1) mtproxy_startup server_hello_hmac_ok bytes=196 len1=122 len2=58 flight=58 extra=0",
+        "logcat.txt:3: 06-30 13:20:30.020 connection(0x1) mtproxy_startup endpoint_handshake_ok reason=server_hello_hmac_ok",
+        "logcat.txt:4: 06-30 13:20:30.090 connection(0x1) mtproxy_startup first_tls_app_recv payload=1015",
+        "logcat.txt:5: 06-30 13:20:30.100 connection(0x1) mtproxy_startup endpoint_data_path_success network_key=sberbank.dns.army:45631 key=sberbank.dns.army:45631:ee:sberbank.dns.army reason=first_tls_app_recv",
+    ]
+    for index, line in enumerate(lines, start=6):
+        base.append(f"logcat.txt:{index}: {line}")
+    return "\n".join(base) + "\n"
 
 
 def main():
@@ -875,6 +905,129 @@ def main():
     require(
         "ok.example:443 ok:pong: 1" in result.stdout,
         "proxy-check pong success must be visible per endpoint",
+    )
+    require(
+        "Stage 2 runtime proof:" in result.stdout
+        and "source_contract_ok=" in result.stdout
+        and "runtime_client_hello_seen=" in result.stdout
+        and "runtime_server_hello_hmac_ok_seen=" in result.stdout
+        and "runtime_first_tls_app_recv_seen=" in result.stdout
+        and "runtime_profile_exhaustion_recovered=" in result.stdout
+        and "runtime_post_handshake_no_appdata_seen=" in result.stdout,
+        "analyzer must print Stage 2 runtime proof checklist labels",
+    )
+    require(
+        "/mnt/d/bin/platform-tools/adb.exe logcat -c" in result.stdout
+        and "python3 Tools/analyze_mtproxy_markers.py mtproxy-logs-live/$RUN_ID/logcat.txt" in result.stdout
+        and "python3 Tools/verify_mtproxy_runtime_logs.py mtproxy-logs-live/$RUN_ID/logcat.txt" in result.stdout,
+        "analyzer must document the machine-local runtime proof command",
+    )
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as evidence_handle:
+        evidence_path = Path(evidence_handle.name)
+        evidence_handle.write(
+            "logcat.txt:1: 06-20 15:00:04.000 connection(0x30) mtproxy_startup connect_start proxy_state=10 "
+            "secret_kind=ee is_faketls=1 domain_len=17 profile=android_chrome "
+            "connection_pattern=strict address=203.0.113.30 port=443\n"
+        )
+        evidence_handle.write("logcat.txt:2: connection(0x30) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
+        evidence_handle.write("logcat.txt:3: connection(0x30) mtproxy_startup socket_connected elapsed=80\n")
+        evidence_handle.write("logcat.txt:4: connection(0x30) mtproxy_startup client_hello_sent bytes=1897\n")
+        evidence_handle.write(
+            "logcat.txt:5: connection(0x30) mtproxy_startup recipe_exhausted key=203.0.113.30:443:cdn.example "
+            "recipe_key=203.0.113.30:443:cdn.example failed_phase=faketls_server_hello_wait_timeout "
+            "evidence=no_bytes_after_client_hello next=handshake_profiles_exhausted\n"
+        )
+        evidence_handle.write(
+            "logcat.txt:6: 06-20 15:00:05.000 connection(0x31) mtproxy_startup connect_start proxy_state=10 "
+            "secret_kind=ee is_faketls=1 domain_len=17 profile=android_chrome "
+            "connection_pattern=strict address=203.0.113.31 port=443\n"
+        )
+        evidence_handle.write("logcat.txt:7: connection(0x31) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
+        evidence_handle.write("logcat.txt:8: connection(0x31) mtproxy_startup socket_connected elapsed=80\n")
+        evidence_handle.write("logcat.txt:9: connection(0x31) mtproxy_startup client_hello_sent bytes=1897\n")
+        evidence_handle.write("logcat.txt:10: connection(0x31) mtproxy_startup server_hello_hmac_ok bytes=2219 len1=1210 len2=993 flight=993 extra=0\n")
+        evidence_handle.write("logcat.txt:11: connection(0x31) mtproxy_startup on_connected tls=1\n")
+        evidence_handle.write(
+            "logcat.txt:12: connection(0x31) mtproxy_startup recipe_failed key=203.0.113.31:443:cdn.example "
+            "recipe_key=203.0.113.31:443:cdn.example phase=post_handshake_no_appdata "
+            "evidence=post_handshake_no_app_data next=android_chrome\n"
+        )
+    try:
+        evidence_result = subprocess.run(
+            [sys.executable, str(ANALYZER), str(evidence_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    finally:
+        evidence_path.unlink(missing_ok=True)
+    require(evidence_result.returncode == 0, evidence_result.stderr.strip() or "evidence analyzer exited with failure")
+    require(
+        "verdict=handshake_profiles_exhausted evidence=no_bytes_after_client_hello" in evidence_result.stdout,
+        "analyzer per-attempt summary must explain handshake recipe exhaustion evidence",
+    )
+    require(
+        "verdict=post_handshake_no_appdata evidence=post_handshake_no_app_data" in evidence_result.stdout,
+        "analyzer per-attempt summary must explain post-handshake data-path evidence",
+    )
+
+    bad_terminal_exhaustion = run_verifier(
+        runtime_contract_log(
+            "06-30 13:20:41.000 proxy_control decision=terminal_quarantine source=native_stage origin=active_proxy account=0 phase=handshake_profiles_exhausted evidence=no_bytes_after_client_hello endpoint=fast2.mtproxy.zip:443:ee:wb.ru probe=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru",
+        )
+    )
+    require(
+        bad_terminal_exhaustion.returncode != 0
+        and "handshake_profiles_exhausted must not terminal_quarantine" in bad_terminal_exhaustion.stderr,
+        "runtime verifier must reject profile exhaustion as terminal quarantine",
+    )
+
+    bad_no_byte_parser = run_verifier(
+        runtime_contract_log(
+            "06-30 13:20:42.000 connection(0x2) mtproxy_startup recipe_failed key=fast2.mtproxy.zip:443:ee:wb.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru phase=faketls_server_hello_wait_timeout evidence=no_bytes_after_client_hello response_bytes=0 next=android_chrome next_parser_variant=lenient_record_parser",
+        )
+    )
+    require(
+        bad_no_byte_parser.returncode != 0
+        and "no-byte ClientHello evidence must keep standard_hmac_parser" in bad_no_byte_parser.stderr,
+        "runtime verifier must reject parser-axis movement for no-byte ClientHello evidence",
+    )
+
+    bad_post_handshake_parser = run_verifier(
+        runtime_contract_log(
+            "06-30 13:20:43.000 connection(0x3) mtproxy_startup phase_adaptive_recipe key=fast2.mtproxy.zip:443:ee:wb.ru recipe_key=fast2.mtproxy.zip:443:secret_hash=1111111111111111:wb.ru family=android_chrome sni_variant=original parser_variant=extra_records_parser classic_variant=none last=post_handshake_no_appdata",
+        )
+    )
+    require(
+        bad_post_handshake_parser.returncode != 0
+        and "post_handshake_no_appdata must not enter parser recipe cross-product" in bad_post_handshake_parser.stderr,
+        "runtime verifier must reject parser recipe cross-product after post_handshake_no_appdata",
+    )
+
+    bad_sibling_failure = run_verifier(
+        runtime_contract_log(
+            "06-30 13:20:44.000 connection(0x4) mtproxy_startup first_tls_app_recv payload=105 key=fast2.mtproxy.zip:443:ee:wb.ru",
+            "06-30 13:20:44.100 connection(0x5) mtproxy_startup close_diagnostic phase=post_handshake_no_appdata key=fast2.mtproxy.zip:443:ee:wb.ru",
+        )
+    )
+    require(
+        bad_sibling_failure.returncode != 0
+        and "fresh first_tls_app_recv overwritten by sibling socket failure" in bad_sibling_failure.stderr,
+        "runtime verifier must reject unsuppressed sibling failure after fresh app-data success",
+    )
+
+    bad_pre_tcp_not_connected = run_verifier(
+        runtime_contract_log(
+            "06-30 13:20:45.000 connection(0x6) mtproxy_startup admission_queue key=fast2.mtproxy.zip:443:ee:wb.ru",
+            "06-30 13:20:45.100 connection(0x6) mtproxy_startup close_diagnostic phase=tcp_not_connected key=fast2.mtproxy.zip:443:ee:wb.ru",
+        )
+    )
+    require(
+        bad_pre_tcp_not_connected.returncode != 0
+        and "tcp_not_connected published before socket_connect_start" in bad_pre_tcp_not_connected.stderr,
+        "runtime verifier must reject pre-TCP timeout mislabeled as tcp_not_connected",
     )
 
     print("MTProxy analyzer guard passed.")

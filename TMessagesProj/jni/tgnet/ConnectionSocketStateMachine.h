@@ -132,6 +132,10 @@ public:
         int64_t mtproxyFirstPlainDataSentTime = 0;
         int64_t mtproxyFirstDataReceivedTime = 0;
         uint32_t mtproxyTlsFrameCompletedCount = 0;
+        int64_t startupCoverStartTime = 0;
+        uint32_t startupCoverFrameCount = 0;
+        bool startupCoverStartedLogged = false;
+        bool startupCoverEndedLogged = false;
     };
 
     struct WssSubstate {
@@ -169,10 +173,6 @@ public:
     struct PendingWriteSubstate {
         ByteArray *tempBuffer = nullptr;
         size_t bytesRead = 0;
-        int64_t startupCoverStartTime = 0;
-        uint32_t startupCoverFrameCount = 0;
-        bool startupCoverStartedLogged = false;
-        bool startupCoverEndedLogged = false;
         bool adjustWriteAfterPreTcpGate = false;
     };
 

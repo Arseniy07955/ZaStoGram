@@ -1,6 +1,16 @@
 package org.telegram.messenger;
 
 public final class ProxyPhasePolicy {
+    public static final String EVIDENCE_NONE = "none";
+    public static final String EVIDENCE_PRE_TCP_LOCAL_WAIT = "pre_tcp_local_wait";
+    public static final String EVIDENCE_DNS_FAILURE = "dns_failure";
+    public static final String EVIDENCE_TCP_FAILURE = "tcp_failure";
+    public static final String EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO = "no_bytes_after_client_hello";
+    public static final String EVIDENCE_SERVER_BYTES_PARSER_FAILURE = "server_bytes_parser_failure";
+    public static final String EVIDENCE_SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch";
+    public static final String EVIDENCE_POST_HANDSHAKE_NO_APP_DATA = "post_handshake_no_app_data";
+    public static final String EVIDENCE_CONFIG_INVALID_SECRET = "config_invalid_secret";
+    public static final String EVIDENCE_CANCELLED_OR_SHADOWED = "cancelled_or_shadowed";
 
     public enum Kind {
         NEUTRAL,
@@ -69,7 +79,7 @@ public final class ProxyPhasePolicy {
     }
 
     public static boolean terminalExactConfig(String phase) {
-        return classify(phase).terminalExactConfig;
+        return isTerminalExactConfigPhase(phase);
     }
 
     public static boolean isLivePhase(String phase) {
@@ -88,6 +98,64 @@ public final class ProxyPhasePolicy {
                 return true;
             default:
                 return false;
+        }
+    }
+
+    public static String evidenceForPhase(String phase) {
+        switch (ProxyCheckDiagnostics.normalize(phase)) {
+            case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:
+            case ProxyCheckDiagnostics.ADMISSION_TIMEOUT:
+            case ProxyCheckDiagnostics.ENDPOINT_COOLDOWN_TIMEOUT:
+            case ProxyCheckDiagnostics.MTPROXY_PROBE_WAIT_TIMEOUT:
+            case ProxyCheckDiagnostics.DNS_COALESCE_TIMEOUT:
+            case ProxyCheckDiagnostics.TCP_CONNECT_GATE_TIMEOUT:
+            case ProxyCheckDiagnostics.CONNECTING_TIMEOUT:
+                return EVIDENCE_PRE_TCP_LOCAL_WAIT;
+
+            case ProxyCheckDiagnostics.DNS_NEGATIVE_CACHE_HIT:
+            case ProxyCheckDiagnostics.DNS_BLOCKED_ZERO_ADDRESS:
+            case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
+            case ProxyCheckDiagnostics.HOST_RESOLVE_TIMEOUT:
+                return EVIDENCE_DNS_FAILURE;
+
+            case ProxyCheckDiagnostics.TCP_NOT_CONNECTED:
+            case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
+            case ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED:
+                return EVIDENCE_TCP_FAILURE;
+
+            case ProxyCheckDiagnostics.TRUE_CLIENT_HELLO_TIMEOUT:
+            case ProxyCheckDiagnostics.FAKETLS_SERVER_HELLO_WAIT_TIMEOUT:
+            case ProxyCheckDiagnostics.SERVER_CLOSED_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.CLIENT_HELLO_SENT_NO_SERVER_HELLO:
+            case ProxyCheckDiagnostics.HANDSHAKE_PROFILES_EXHAUSTED:
+                return EVIDENCE_NO_BYTES_AFTER_CLIENT_HELLO;
+
+            case ProxyCheckDiagnostics.TLS_ALERT_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.SHORT_TLS_RESPONSE_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.UNRECOGNIZED_RESPONSE_AFTER_CLIENT_HELLO:
+            case ProxyCheckDiagnostics.UNRECOGNIZED_TLS_RESPONSE_AFTER_CLIENT_HELLO:
+                return EVIDENCE_SERVER_BYTES_PARSER_FAILURE;
+
+            case ProxyCheckDiagnostics.SERVER_HELLO_HMAC_MISMATCH:
+                return EVIDENCE_SERVER_HELLO_HMAC_MISMATCH;
+
+            case ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE:
+            case ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA:
+            case ProxyCheckDiagnostics.DROPPED_EARLY_AFTER_APPDATA:
+            case ProxyCheckDiagnostics.DROPPED_AFTER_APPDATA:
+                return EVIDENCE_POST_HANDSHAKE_NO_APP_DATA;
+
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
+                return EVIDENCE_CONFIG_INVALID_SECRET;
+
+            case ProxyCheckDiagnostics.BACKGROUND_HANDSHAKE_ABORTED:
+            case ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE:
+            case ProxyCheckDiagnostics.IGNORED_CANCELLED_GENERATION:
+                return EVIDENCE_CANCELLED_OR_SHADOWED;
+
+            default:
+                return EVIDENCE_NONE;
         }
     }
 
@@ -200,6 +268,16 @@ public final class ProxyPhasePolicy {
 
             default:
                 return failure(KeyScope.EXACT, true, false);
+        }
+    }
+
+    private static boolean isTerminalExactConfigPhase(String phase) {
+        switch (ProxyCheckDiagnostics.normalize(phase)) {
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN_CONTROL_CHAR:
+            case ProxyCheckDiagnostics.SECRET_PARSE_INVALID_DOMAIN:
+                return true;
+            default:
+                return false;
         }
     }
 
