@@ -638,7 +638,7 @@ public class SharedConfig {
             passportConfigJson = preferences.getString("passportConfigJson", "");
             passportConfigHash = preferences.getInt("passportConfigHash", 0);
             storageCacheDir = preferences.getString("storageCacheDir", null);
-            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
+            proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", true);
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
             showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
@@ -1679,6 +1679,34 @@ public class SharedConfig {
             proxyList.add(0, info);
         }
         ensureDefaultProxyEntry(preferences);
+        ensureZaStoDefaultProxies(preferences);
+    }
+
+    private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v1", false)) {
+            return;
+        }
+        ProxyInfo info1 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee1ccac066cf8e32478e0a5bf03061746e6e736b2e63646e2e636174706177732e7275");
+        ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd1ccac066cf8e32478e0a5bf03061746e");
+        ProxyInfo info3 = new ProxyInfo("144.31.15.132", 443, "", "", "ee1ccac066cf8e32478e0a5bf03061746e6e736b2e63646e2e636174706177732e7275");
+
+        proxyList.add(0, info3);
+        proxyList.add(0, info2);
+        proxyList.add(0, info1);
+
+        currentProxy = info1;
+
+        preferences.edit()
+                .putBoolean("proxies_za_sto_applied_v1", true)
+                .putBoolean("proxy_enabled", true)
+                .putString("proxy_ip", info1.address)
+                .putInt("proxy_port", info1.port)
+                .putString("proxy_user", info1.username)
+                .putString("proxy_pass", info1.password)
+                .putString("proxy_secret", info1.secret)
+                .apply();
+
+        saveProxyList();
     }
 
     // Seeds a removable default SOCKS5 entry (127.0.0.1:1353) into the proxy
