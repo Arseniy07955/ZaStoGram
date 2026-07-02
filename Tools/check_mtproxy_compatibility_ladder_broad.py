@@ -31,6 +31,7 @@ def main() -> int:
     adaptive_cpp = read(TGNET.parent / "mtproxy/MtProxyAdaptivePolicy.cpp")
     coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
     coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
+    endpoint_recorder = read(TGNET.parent / "mtproxy/MtProxyEndpointRecorder.cpp")
     recovery_h = read(TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.h") if (TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.h").exists() else ""
     recovery_cpp = read(TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.cpp") if (TGNET.parent / "mtproxy/MtProxyRecoveryPolicy.cpp").exists() else ""
     socket = read(TGNET / "ConnectionSocket.cpp")
@@ -185,7 +186,7 @@ def main() -> int:
     )
     require(
         "return !currentSecretIsFakeTls" in socket
-        and "classic_fallback_allowed" in socket,
+        and "classic_fallback_allowed" in endpoint_recorder,
         "classic/DD fallback variants must be gated by secret kind and never synthesized from ee",
         failures,
     )

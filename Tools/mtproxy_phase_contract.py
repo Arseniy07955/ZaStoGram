@@ -60,7 +60,7 @@ class MtProxyPhase:
     observation_facade: bool = False
     # Local scheduler/gate timeout: the wait was produced by our own pre-TCP
     # machinery (admission queue, endpoint cooldown, gates), not by the
-    # network. recordMtProxyEndpointFailure skips these so a local wake-up
+    # network. MtProxyEndpointRecorder::recordFailure skips these so a local wake-up
     # never counts as an endpoint failure. Deliberately EXCLUDES
     # mtproxy_probe_wait_timeout (a probe that never came back is signal,
     # see mtproxy-probe-hang history) and INCLUDES background_handshake_aborted
@@ -222,7 +222,7 @@ def _validate_contract() -> None:
         if phase.local_scheduler_timeout and not phase.native:
             raise RuntimeError(
                 f"local scheduler timeout phase {phase.name} must be a native phase: "
-                "the skip list is consumed by recordMtProxyEndpointFailure in native code"
+                "the skip list is consumed by MtProxyEndpointRecorder::recordFailure in native code"
             )
         if phase.local_scheduler_timeout and phase.pre_io_terminal:
             raise RuntimeError(

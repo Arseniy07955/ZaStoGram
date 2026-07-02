@@ -319,12 +319,14 @@ def main() -> int:
     record_switch = method_body(engine, "void recordSwitch")
     is_candidate_allowed = method_body(engine, "private boolean isCandidateAllowed")
     should_schedule_fallback = method_body(store, "public static boolean shouldScheduleFallback")
+    on_runtime_event_facade = method_body(store, "public static Decision onRuntimeEvent")
     on_native_stage_facade = method_body(store, "public static Decision onNativeStage")
     on_native_stage = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
     mark_endpoint_failure = method_body(store, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
 
     require(
-        "return ProxyEventReducer.reduce(event)" in on_native_stage_facade,
+        "return onRuntimeEvent(event)" in on_native_stage_facade
+        and "return ProxyEventReducer.reduce(event)" in on_runtime_event_facade,
         "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
         failures,
     )

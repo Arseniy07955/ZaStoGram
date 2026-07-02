@@ -190,11 +190,13 @@ set_target_properties(tdutils PROPERTIES IMPORTED_LOCATION ${CMAKE_HOME_DIRECTOR
 add_library(mtproxy_core STATIC
         mtproxy/MtProxyAdaptivePolicy.cpp
         mtproxy/MtProxyDataPathShaper.cpp
+        mtproxy/MtProxyEndpointRecorder.cpp
         mtproxy/MtProxyEndpointPolicy.cpp
         mtproxy/MtProxyFailureEvidence.cpp
         mtproxy/MtProxyHandshakePlan.cpp
         mtproxy/MtProxyHandshakeScheduler.cpp
         mtproxy/MtProxyProbeCoordinator.cpp
+        mtproxy/MtProxyProbeLease.cpp
         mtproxy/MtProxyRecoveryPolicy.cpp
         mtproxy/MtProxyRetryAuthority.cpp
         mtproxy/MtProxySecretDomain.cpp

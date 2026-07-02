@@ -230,8 +230,10 @@ def main() -> int:
     require("origin" in wrapper and "probeKey" in wrapper and "activationGeneration" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper and "suggestedReconnectHoldMs" in wrapper, "JNI proxy stage callback must carry origin, probe key, activation generation and the native hold", failures)
     require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines, "native delegate must expose proxy stage origin, probe key, activation generation and the native hold", failures)
     require(
-        "return ProxyEventReducer.reduce(event)" in runtime,
-        "ProxyRuntimeStateStore.onNativeStage must delegate to ProxyEventReducer",
+        "public static Decision onRuntimeEvent(ProxyConnectionEvent event)" in runtime
+        and "return ProxyEventReducer.reduce(event)" in runtime
+        and "return onRuntimeEvent(event)" in runtime,
+        "ProxyRuntimeStateStore must expose one runtime-event reducer entry and keep onNativeStage as a wrapper",
         failures,
     )
     require(

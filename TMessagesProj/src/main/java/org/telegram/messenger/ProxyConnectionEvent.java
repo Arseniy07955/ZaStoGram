@@ -8,6 +8,7 @@ public final class ProxyConnectionEvent {
     public static final String SOURCE_PROXY_CHECK = "proxy_check";
     public static final String SOURCE_CONNECTED = "connected";
     public static final String SOURCE_CONNECT_START = "connect_start";
+    public static final String SOURCE_USABLE_SUCCESS = "usable_success";
 
     public enum Origin {
         ACTIVE_SOCKET("active_socket"),
@@ -127,11 +128,23 @@ public final class ProxyConnectionEvent {
     }
 
     public static ProxyConnectionEvent connected(int account, SharedConfig.ProxyInfo proxyInfo) {
-        return new ProxyConnectionEvent(SOURCE_CONNECTED, Origin.ACTIVE_SOCKET, account, ProxyCheckDiagnostics.OK, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", 0, SystemClock.elapsedRealtime());
+        return connected(account, proxyInfo, Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime());
+    }
+
+    public static ProxyConnectionEvent connected(int account, SharedConfig.ProxyInfo proxyInfo, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_CONNECTED, origin, account, ProxyCheckDiagnostics.OK, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
     }
 
     public static ProxyConnectionEvent connectStart(int account, SharedConfig.ProxyInfo proxyInfo) {
-        return new ProxyConnectionEvent(SOURCE_CONNECT_START, Origin.ACTIVE_SOCKET, account, ProxyCheckDiagnostics.CONNECT_START, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", 0, SystemClock.elapsedRealtime());
+        return connectStart(account, proxyInfo, Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime());
+    }
+
+    public static ProxyConnectionEvent connectStart(int account, SharedConfig.ProxyInfo proxyInfo, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_CONNECT_START, origin, account, ProxyCheckDiagnostics.CONNECT_START, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
+    }
+
+    public static ProxyConnectionEvent usableSuccess(int account, SharedConfig.ProxyInfo proxyInfo, String diagnostic, Origin origin, int activationGeneration, long timestamp) {
+        return new ProxyConnectionEvent(SOURCE_USABLE_SUCCESS, origin, account, diagnostic, ProxyEndpointKey.liveStage(proxyInfo), ProxyEndpointKey.networkLiveStage(proxyInfo), "", activationGeneration, timestamp);
     }
 
     public static boolean isActiveProxyOrigin(Origin origin) {

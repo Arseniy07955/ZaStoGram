@@ -156,7 +156,6 @@ def main() -> int:
         "canRunMtProxyPreTcpTimer",
         "classifyMtProxyPreTcpTimeoutDiagnostic",
         "deriveMtProxyTerminalDiagnostic",
-        "mtProxyDiagnosticIsLocalSchedulerTimeout",
         "queueAdjustWriteOpAfterOutboundAppend",
         "setMtProxySocketConnectedLogged",
         "canStartHostResolve",
@@ -186,8 +185,8 @@ def main() -> int:
         require(field in state_source, f"native transport logs must include stable field {field}", failures)
 
     require(
-        "void ConnectionSocket::recordMtProxyEndpointHandshakeOk" in socket
-        and "void ConnectionSocket::recordMtProxyEndpointDataPathSuccess" in socket
+        "MtProxyEndpointRecorder::recordHandshakeOk" in socket
+        and "MtProxyEndpointRecorder::recordDataPathSuccess" in socket
         and "recordMtProxyEndpointSuccess" not in header,
         "endpoint success must be split into handshake-ok and data-path-success helpers",
         failures,
@@ -199,8 +198,8 @@ def main() -> int:
         server_hello_end = socket.find("proxyCheckDiagnostic = MtProxyPhase::PostHandshakeNoAppdata", server_hello_start)
     server_hello_body = socket[server_hello_start:server_hello_end]
     require(
-        'recordMtProxyEndpointHandshakeOk("server_hello_hmac_ok")' in server_hello_body
-        and "recordMtProxyEndpointDataPathSuccess" not in server_hello_body,
+        'MtProxyEndpointRecorder::recordHandshakeOk(mtProxyEndpointSuccessContext("server_hello_hmac_ok"), mtProxyEndpointRecorderCallbacks())' in server_hello_body
+        and "recordDataPathSuccess" not in server_hello_body,
         "server_hello_hmac_ok must record handshake-ok only, not data-path success",
         failures,
     )
@@ -212,7 +211,7 @@ def main() -> int:
     ]
     require(
         "publishMtProxySocketObservation(observation)" in tls_app_body
-        and 'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in tls_app_body,
+        and 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())' in tls_app_body,
         "first_tls_app_recv must record data-path success",
         failures,
     )
@@ -228,7 +227,7 @@ def main() -> int:
         socket.find("void ConnectionSocket::rotateMtProxyTlsProfileOnFailureIfNeeded", plain_success_start)
     ]
     first_plain_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s"'
-    first_plain_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")'
+    first_plain_recv_success = 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_mtproxy_packet_recv"), mtProxyEndpointRecorderCallbacks())'
     require(
         "publishMtProxySocketObservation(observation)" in plain_success_body
         and first_plain_recv_success in plain_success_body,
@@ -706,7 +705,7 @@ def main() -> int:
             "std::string terminalDiagnostic = deriveMtProxyTerminalDiagnostic(reason, error);",
             "mtproxy_disconnect reason=",
             "close_diagnostic phase=",
-            "releaseMtProxyProbeLease();",
+            "mtProxyProbeLease.release();",
             "detachConnection(this);",
             'setTransportState(TransportState::Idle, "closeSocket_cleanup");',
             "onDisconnected(reason, error);",
@@ -745,12 +744,13 @@ def main() -> int:
         "real TCP connect timeout must be measured from the timeline TCP start, not from the pre-TCP/openConnection lastEventTime",
         failures,
     )
-    local_phase_body = method_body(socket, "bool ConnectionSocket::mtProxyDiagnosticIsLocalSchedulerTimeout", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    recorder = (ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp").read_text(encoding="utf-8")
+    local_phase_body = method_body(recorder, "void MtProxyEndpointRecorder::recordFailure", "void MtProxyEndpointRecorder::recordHandshakeOk")
     classification = (ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h").read_text(encoding="utf-8")
     local_generated_start = classification.find("inline bool isLocalSchedulerTimeout")
     local_generated = classification[local_generated_start:classification.find("\n}", local_generated_start)]
     require(
-        "MtProxyPhase::isLocalSchedulerTimeout(diagnostic)" in local_phase_body
+        "MtProxyPhase::isLocalSchedulerTimeout(context.diagnostic.c_str())" in local_phase_body
         and local_generated_start >= 0
         and '"connection_not_started"' in local_generated
         and '"admission_timeout"' in local_generated
@@ -1149,9 +1149,9 @@ def main() -> int:
     require(
         "std::string terminalDiagnostic = deriveMtProxyTerminalDiagnostic(reason, error);" in close_body
         and "publishProxyConnectionStage(resolution.terminalDiagnostic.c_str())" in close_body
-        and 'recordMtProxyEndpointFailure(resolution.terminalDiagnostic.c_str(), "closeSocket")' in close_body
+        and 'MtProxyEndpointRecorder::recordFailure(mtProxyEndpointFailureContext(resolution.terminalDiagnostic.c_str(), "closeSocket"), mtProxyEndpointRecorderCallbacks())' in close_body
         and "publishProxyConnectionStage(proxyCheckDiagnostic.c_str())" not in close_body
-        and 'recordMtProxyEndpointFailure(proxyCheckDiagnostic.c_str(), "closeSocket")' not in close_body,
+        and 'mtProxyEndpointFailureContext(proxyCheckDiagnostic.c_str(), "closeSocket")' not in close_body,
         "closeSocket must publish/record the step-3 resolution's terminal diagnostic, not the mutable in-flight proxyCheckDiagnostic",
         failures,
     )
@@ -1203,9 +1203,9 @@ def main() -> int:
         "native socket close must be checked through the shared action requirements policy",
         failures,
     )
-    endpoint_failure_body = method_body(socket, "void ConnectionSocket::recordMtProxyEndpointFailure", "void ConnectionSocket::recordMtProxyEndpointHandshakeOk")
+    endpoint_failure_body = method_body(recorder, "void MtProxyEndpointRecorder::recordFailure", "void MtProxyEndpointRecorder::recordHandshakeOk")
     require(
-        "mtProxyDiagnosticIsLocalSchedulerTimeout" in endpoint_failure_body
+        "MtProxyPhase::isLocalSchedulerTimeout(context.diagnostic.c_str())" in endpoint_failure_body
         and "return;" in endpoint_failure_body,
         "native endpoint failure accounting must ignore local scheduler timeout phases",
         failures,

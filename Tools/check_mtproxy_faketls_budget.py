@@ -204,6 +204,7 @@ def main() -> int:
     coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
     coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
     socket_cpp = read(TGNET / "ConnectionSocket.cpp")
+    endpoint_recorder_cpp = read(TGNET.parent / "mtproxy/MtProxyEndpointRecorder.cpp")
     connection_cpp = read(TGNET / "Connection.cpp")
     phase_contract_h = read(TGNET.parent / "mtproxy/MtProxyPhaseContract.h")
     phase_contract_py = read(TOOLS / "mtproxy_phase_contract.py")
@@ -223,7 +224,13 @@ def main() -> int:
     require("MT_PROXY_FAKETLS_BUDGET_WINDOW_MS" in coordinator_cpp and "8000" in coordinator_cpp, "FakeTLS budget wall-clock window must be 8 seconds", failures)
     require("MT_PROXY_FAKETLS_BUDGET_MAX_OWNER_ATTEMPTS" in coordinator_cpp and "3" in coordinator_cpp, "FakeTLS budget must cap owner attempts at 3", failures)
     require("MT_PROXY_FAKETLS_BUDGET_REPEATED_SIGNATURE_LIMIT" in coordinator_cpp and "2" in coordinator_cpp, "bad-flight budget must cap repeated signatures at 2", failures)
-    require("HandshakeBudgetBackoff" in socket_cpp and "terminalBudgetExhausted" in socket_cpp, "ConnectionSocket must stop before TCP on budget backoff and publish terminal budget exhaustion", failures)
+    require(
+        "HandshakeBudgetBackoff" in socket_cpp
+        and "terminalBudgetExhausted" in endpoint_recorder_cpp
+        and "faketls_budget_exhausted" in endpoint_recorder_cpp,
+        "ConnectionSocket must stop before TCP on budget backoff, and MtProxyEndpointRecorder must publish terminal budget exhaustion",
+        failures,
+    )
     require("mtProxyFailureResponseSignature" in socket_cpp, "ConnectionSocket must compute stable response signatures for post-ClientHello bytes", failures)
     require("ProxyStatusFaketlsHandshakeFailedShort" in values and "MTProxy/FakeTLS handshake failed" in values, "English strings must define the short FakeTLS terminal user-facing text", failures)
     require("ProxyStatusFaketlsHandshakeFailedShort" in values_ru and "Сервер доступен по TCP, но MTProxy/FakeTLS рукопожатие не прошло." in values_ru, "Russian strings must define the short FakeTLS terminal user-facing text", failures)
@@ -261,8 +268,12 @@ def main() -> int:
         failures,
     )
     require(
-        socket_cpp.count("proxySuggestedReconnectHoldMs = probeDecision.waitMs;") >= 2,
-        "both pre-TCP backoff branches must capture the coordinator hold for the Connection layer",
+        "callbacks.setSuggestedReconnectHold" in socket_cpp
+        and "proxySuggestedReconnectHoldMs = holdMs;" in socket_cpp
+        and "recordProfilesExhaustedBackoff" in socket_cpp
+        and "recordHandshakeBudgetBackoff" in socket_cpp
+        and endpoint_recorder_cpp.count("setSuggestedReconnectHold(callbacks, context.holdMs);") >= 2,
+        "both pre-TCP backoff branches must capture the coordinator hold for the Connection layer through MtProxyEndpointRecorder",
         failures,
     )
     retry_authority_cpp = read(TGNET.parent / "mtproxy/MtProxyRetryAuthority.cpp")

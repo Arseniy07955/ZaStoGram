@@ -199,7 +199,7 @@ def main() -> None:
     )
     require(
         ("ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)" in reducer_text or "if (verdict.usableSuccess)" in reducer_text)
-        and "ProxyRuntimeStateStore.markConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in reducer_text,
+        and "ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in reducer_text,
         "concrete success phases from native must clear stale Java endpoint backoff and fresh terminal failures",
     )
     require(

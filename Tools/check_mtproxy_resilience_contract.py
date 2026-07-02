@@ -109,10 +109,11 @@ def main() -> None:
         "static int64_t cooldownMs",
         "bool MtProxyEndpointPolicy::extractSslipIpv4Address",
     )
+    recorder = read(ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp")
     failure = slice_between(
-        socket,
-        "void ConnectionSocket::recordMtProxyEndpointFailure",
-        "void ConnectionSocket::recordMtProxyEndpointHandshakeOk",
+        recorder,
+        "void MtProxyEndpointRecorder::recordFailure",
+        "void MtProxyEndpointRecorder::recordHandshakeOk",
     )
     send_frame = slice_between(
         socket,
@@ -222,7 +223,7 @@ def main() -> None:
         "post-handshake data-path failures must use shaping/backoff, not FakeTLS recipe cursor movement",
     )
     require(
-        "currentSecretIsFakeTls" in failure
+        "context.fakeTls" in failure
         and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure
         and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure,
         "recipe level must advance only for FakeTLS connections with recovery-action cursor movement",

@@ -34,6 +34,7 @@ HANDSHAKE_PLAN_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.h"
 HANDSHAKE_PLAN = ROOT / "TMessagesProj/jni/mtproxy/MtProxyHandshakePlan.cpp"
 RECOVERY_POLICY_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.h"
 RECOVERY_POLICY = ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp"
+ENDPOINT_RECORDER = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp"
 
 RECIPE_FAILURES = {
     "true_client_hello_timeout",
@@ -136,6 +137,8 @@ def main() -> int:
     handshake_plan = read(HANDSHAKE_PLAN) if HANDSHAKE_PLAN.exists() else ""
     recovery_policy_h = read(RECOVERY_POLICY_H) if RECOVERY_POLICY_H.exists() else ""
     recovery_policy = read(RECOVERY_POLICY) if RECOVERY_POLICY.exists() else ""
+    endpoint_recorder = read(ENDPOINT_RECORDER) if ENDPOINT_RECORDER.exists() else ""
+    recorder_failure = method_body(endpoint_recorder, "void MtProxyEndpointRecorder::recordFailure")
 
     for phase in RECIPE_FAILURES | {"handshake_profiles_exhausted", "secret_parse_invalid_domain_control_char", "secret_parse_invalid_domain"}:
         require(phase in java_phase_names(), f"phase contract must expose Java phase {phase}", failures)
@@ -224,10 +227,11 @@ def main() -> int:
     # on it; endpoint cooldown paces the retry with the same recipe. Recipe progression is
     # reserved for failures with actual response bytes.
     require(
-        "bool silentAfterClientHello = failureResponseBytes == 0" in socket
-        and "evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello" in socket
-        and "&& !silentAfterClientHello" in socket
-        and "silent_after_client_hello" in socket,
+        "context.responseBytes = bytesRead" in socket
+        and "bool silentAfterClientHello = context.responseBytes == 0" in recorder_failure
+        and "evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello" in recorder_failure
+        and "&& !silentAfterClientHello" in recorder_failure
+        and "silent_after_client_hello" in recorder_failure,
         "zero-bytes-after-ClientHello failures must hold the recipe ladder instead of advancing it",
         failures,
     )
@@ -264,9 +268,9 @@ def main() -> int:
         failures,
     )
     require(
-        has_phase(socket, "handshake_profiles_exhausted", native_constants)
-        and "recipe_exhausted" in socket,
-        "ConnectionSocket must publish handshake_profiles_exhausted after recipe exhaustion",
+        has_phase(endpoint_recorder, "handshake_profiles_exhausted", native_constants)
+        and "recipe_exhausted" in endpoint_recorder,
+        "MtProxyEndpointRecorder must publish handshake_profiles_exhausted after recipe exhaustion",
         failures,
     )
     require(
@@ -325,8 +329,8 @@ def main() -> int:
         failures,
     )
     require(
-        "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in socket,
-        "ConnectionSocket must use recovery action before entering the recipe-failure path",
+        "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in recorder_failure,
+        "MtProxyEndpointRecorder must use recovery action before entering the recipe-failure path",
         failures,
     )
     require(
@@ -401,14 +405,14 @@ def main() -> int:
         failures,
     )
     require(
-        "recipe_failed" in socket
-        and "next_family" in socket
-        and "next_sni_variant" in socket
-        and "next_parser_variant" in socket
-        and "next_classic_variant" in socket
-        and "recipe_id=" in socket
+        "recipe_failed" in endpoint_recorder
+        and "next_family" in endpoint_recorder
+        and "next_sni_variant" in endpoint_recorder
+        and "next_parser_variant" in endpoint_recorder
+        and "next_classic_variant" in endpoint_recorder
+        and "recipe_id=" in endpoint_recorder
         and "server_hello_parser=" in socket,
-        "ConnectionSocket must log each recipe failure with the current recipe identity and next cursor",
+        "MtProxyEndpointRecorder must log each recipe failure with the current recipe identity and next cursor",
         failures,
     )
     require(

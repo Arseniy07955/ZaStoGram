@@ -13,6 +13,7 @@ SOCKET = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_HEADER = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
 PUBLISHER_HEADER = ROOT / "TMessagesProj/jni/mtproxy/MtProxySocketPublisher.h"
 PUBLISHER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxySocketPublisher.cpp"
+RECORDER_CPP = ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp"
 CLASSIFICATION_H = ROOT / "TMessagesProj/jni/mtproxy/MtProxyPhaseClassification.h"
 CMAKE = ROOT / "TMessagesProj/jni/CMakeLists.txt"
 
@@ -47,6 +48,7 @@ def main() -> int:
     socket_header = SOCKET_HEADER.read_text(encoding="utf-8", errors="replace")
     publisher_header = PUBLISHER_HEADER.read_text(encoding="utf-8", errors="replace")
     publisher_cpp = PUBLISHER_CPP.read_text(encoding="utf-8", errors="replace")
+    recorder = RECORDER_CPP.read_text(encoding="utf-8", errors="replace")
     cmake = CMAKE.read_text(encoding="utf-8", errors="replace")
     verifier = VERIFIER.read_text(encoding="utf-8", errors="replace")
     require(
@@ -101,12 +103,12 @@ def main() -> int:
         and "void publishMtProxySocketObservation(const MtProxySocketObservation &observation)" in socket_header
         and "void ConnectionSocket::publishMtProxySocketObservation" in socket
         and "publishProxyConnectionStage(publishedObservation.phase)" in socket
-        and "recordMtProxyEndpointFailure(publishedObservation.phase, publishedObservation.reason)" in socket,
+        and "MtProxyEndpointRecorder::recordFailure(mtProxyEndpointFailureContext(publishedObservation.phase, publishedObservation.reason), mtProxyEndpointRecorderCallbacks())" in socket,
         "ConnectionSocket must bridge publisher observations to the existing visible-stage and endpoint-failure paths",
     )
     require(
-        'recipeFailureObservation.phase = "recipe_failed"' in socket
-        and "exhaustedObservation.phase = MtProxyPhase::HandshakeProfilesExhausted" in socket
+        'recipeFailureObservation.phase = "recipe_failed"' in recorder
+        and "exhaustedObservation.phase = MtProxyPhase::HandshakeProfilesExhausted" in recorder
         and "observation.phase = MtProxyPhase::DnsBlockedZeroAddress" in socket
         and "observation.phase = MtProxyPhase::PostHandshakeNoAppdata" in socket
         and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in socket
@@ -141,7 +143,7 @@ def main() -> int:
         "README must document that data-path success is ordered after first app-data evidence",
     )
     first_tls_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_tls_app_recv payload=%d"'
-    first_tls_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")'
+    first_tls_recv_success = 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())'
     require(
         first_tls_recv_log in socket
         and first_tls_recv_success in socket
@@ -149,7 +151,7 @@ def main() -> int:
         "ConnectionSocket must log first_tls_app_recv before endpoint_data_path_success",
     )
     first_mtproxy_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s"'
-    first_mtproxy_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")'
+    first_mtproxy_recv_success = 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_mtproxy_packet_recv"), mtProxyEndpointRecorderCallbacks())'
     require(
         first_mtproxy_recv_log in socket
         and first_mtproxy_recv_success in socket

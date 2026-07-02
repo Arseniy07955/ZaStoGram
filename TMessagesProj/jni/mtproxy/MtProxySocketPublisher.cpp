@@ -21,6 +21,20 @@ void mtProxyPublishSocketObservation(const MtProxySocketObservation &observation
     }
 }
 
+void mtProxyPublishSocketObservation(const MtProxySocketObservation &observation, const MtProxySocketPublisherContext &context, const MtProxySocketPublisherCallbacks &callbacks) {
+    MtProxySocketObservation enriched = observation;
+    if (enriched.endpointKey.empty()) {
+        enriched.endpointKey = context.endpointKey;
+    }
+    if (enriched.probeKey.empty()) {
+        enriched.probeKey = context.probeKey;
+    }
+    if (enriched.networkEndpointKey.empty()) {
+        enriched.networkEndpointKey = context.networkEndpointKey;
+    }
+    mtProxyPublishSocketObservation(enriched, callbacks);
+}
+
 bool mtProxySocketObservationIsHighRiskPhase(const char *phase) {
     // The phase set is generated from Tools/mtproxy_phase_contract.py
     // (observation_facade=True) into MtProxyPhaseClassification.h.

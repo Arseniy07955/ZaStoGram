@@ -79,6 +79,7 @@ def main() -> int:
     values = read(VALUES)
     values_ru = read(VALUES_RU)
     reducer_body = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
+    usable_success_body = method_body(reducer, "private static ProxyRuntimeStateStore.Decision applyVisibleUsableSuccess")
     shadow_idx = reducer_body.find("ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE.equals(normalizedPhase)")
     shadow_end = reducer_body.find("boolean concretePhase", shadow_idx)
     shadow_body = reducer_body[shadow_idx:shadow_end] if shadow_idx >= 0 and shadow_end >= 0 else ""
@@ -247,7 +248,7 @@ def main() -> int:
         and "mirrorVisiblePhase(SharedConfig.ProxyInfo proxyInfo, String phase, long now, int activationGeneration)" in status_mirror
         and "proxyInfo.lastCheckActivationGeneration = activationGeneration" in status_mirror
         and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, visiblePhase, event.timestamp, event.activationGeneration)" in visible
-        and "ProxyRuntimeStateStore.markConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in reducer_body,
+        and "ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in usable_success_body,
         "visible diagnostic state must record the activationGeneration from native socket verdict events",
         failures,
     )
@@ -456,7 +457,7 @@ def main() -> int:
         failures,
     )
 
-    mark_start = method_body(visible, "static void markConnectionStarting")
+    mark_start = method_body(visible, "static boolean markConnectionStarting")
     require(
         "origin == ProxyConnectionEvent.Origin.USER_SELECT" in mark_start
         and "origin == ProxyConnectionEvent.Origin.SETTINGS_CHANGE" in mark_start

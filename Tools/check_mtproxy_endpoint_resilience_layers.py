@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "socket": ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp",
     "endpoint_policy": ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointPolicy.cpp",
+    "endpoint_recorder": ROOT / "TMessagesProj/jni/mtproxy/MtProxyEndpointRecorder.cpp",
     "probe_coordinator": ROOT / "TMessagesProj/jni/mtproxy/MtProxyProbeCoordinator.cpp",
     "recovery_policy": ROOT / "TMessagesProj/jni/mtproxy/MtProxyRecoveryPolicy.cpp",
     "data_path_shaper": ROOT / "TMessagesProj/jni/mtproxy/MtProxyDataPathShaper.cpp",
@@ -53,6 +54,7 @@ def has_phase(source, phase, constants):
 def main():
     socket = read("socket")
     endpoint_policy = read("endpoint_policy")
+    endpoint_recorder = read("endpoint_recorder")
     probe_coordinator = read("probe_coordinator")
     recovery_policy = read("recovery_policy")
     data_path_shaper = read("data_path_shaper")
@@ -132,7 +134,7 @@ def main():
         "domain MTProxy endpoints must coalesce cold DNS resolves before calling delegate DNS",
     )
     schedule_start = socket.find("bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded")
-    schedule_end = socket.find("void ConnectionSocket::recordMtProxyEndpointFailure", schedule_start)
+    schedule_end = socket.find("MtProxyEndpointRecorder::Callbacks ConnectionSocket::mtProxyEndpointRecorderCallbacks", schedule_start)
     schedule_body = socket[schedule_start:schedule_end]
     require(
         "!mtProxyConnectionPatternUsesCooldown(connectionPatternMode)" not in schedule_body,
@@ -185,12 +187,14 @@ def main():
         "pre-TCP host/DNS failures must use short priority-aware network cooldowns, not old long endpoint-wide waits",
     )
     require(
-        "MtProxyEndpointPolicy::recordFailure" in socket
-        and "priority=%d cooldown_ms" in socket,
+        "MtProxyEndpointPolicy::recordFailure" in endpoint_recorder
+        and "endpointContext.priority = context.priority" in endpoint_recorder
+        and '" priority=", context.priority' in endpoint_recorder
+        and '" cooldown_ms="' in endpoint_recorder,
         "endpoint failure recording must pass connection priority into cooldown calculation and log it",
     )
     require(
-        "recordMtProxyEndpointFailure(resolution.terminalDiagnostic.c_str()" in socket,
+        "MtProxyEndpointRecorder::recordFailure(mtProxyEndpointFailureContext(resolution.terminalDiagnostic.c_str()" in socket,
         "closeSocket must feed derived terminal diagnostics back into endpoint resilience state",
     )
     timer_start = socket.find("void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer")
@@ -296,7 +300,7 @@ def main():
     require(
         "!resolution.suppress && reason != 0 && isCurrentMtProxyConnection() && !resolution.terminalDiagnostic.empty()" in close_body
         and "publishProxyConnectionStage(resolution.terminalDiagnostic.c_str())" in close_body
-        and "recordMtProxyEndpointFailure(resolution.terminalDiagnostic.c_str(), \"closeSocket\")" in close_body,
+        and "MtProxyEndpointRecorder::recordFailure(mtProxyEndpointFailureContext(resolution.terminalDiagnostic.c_str(), \"closeSocket\"), mtProxyEndpointRecorderCallbacks())" in close_body,
         "closeSocket must still publish and record real non-suppressed MTProxy close diagnostics",
     )
     require(
@@ -314,12 +318,12 @@ def main():
         "new openConnection must release any stale active TCP connect slot before resetting endpoint state",
     )
     require(
-        'recordMtProxyEndpointHandshakeOk("server_hello_hmac_ok")' in socket,
+        'MtProxyEndpointRecorder::recordHandshakeOk(mtProxyEndpointSuccessContext("server_hello_hmac_ok"), mtProxyEndpointRecorderCallbacks())' in socket,
         "server_hello_hmac_ok must record handshake boundary without clearing endpoint data-path backoff",
     )
     for marker in [
-        'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")',
-        'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")',
+        'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())',
+        'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_mtproxy_packet_recv"), mtProxyEndpointRecorderCallbacks())',
     ]:
         require(marker in socket, f"endpoint data-path success marker missing: {marker}")
     require(
@@ -515,9 +519,9 @@ def main():
         "MtProxyRecoveryActionKind::PostHandshakeShapingBackoff" in recovery_policy,
         "post-handshake no-appdata must be handled by recovery shaping/backoff, not the recipe cursor ladder",
     )
-    failure_start = socket.find("void ConnectionSocket::recordMtProxyEndpointFailure")
-    failure_end = socket.find("void ConnectionSocket::recordMtProxyEndpointHandshakeOk", failure_start)
-    failure_body = socket[failure_start:failure_end]
+    failure_start = endpoint_recorder.find("void MtProxyEndpointRecorder::recordFailure")
+    failure_end = endpoint_recorder.find("void MtProxyEndpointRecorder::recordHandshakeOk", failure_start)
+    failure_body = endpoint_recorder[failure_start:failure_end]
     state_key_start = endpoint_policy.find("std::string MtProxyEndpointPolicy::stateKeyForPhase")
     state_key_end = endpoint_policy.find("bool MtProxyEndpointPolicy::failureNeedsCooldown", state_key_start)
     state_key_body = endpoint_policy[state_key_start:state_key_end]
@@ -543,28 +547,27 @@ def main():
         "failure cooldown and FakeTLS recipe must use separate endpoint-policy and probe-coordinator state entries",
     )
     require(
-        "currentSecretIsFakeTls" in failure_body
+        "context.fakeTls" in failure_body
         and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure_body
         and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure_body,
         "recipe level must only advance for FakeTLS connections with cursor-advancing recovery actions, never for dd/legacy MTProxy",
     )
-    success_start = socket.find("void ConnectionSocket::recordMtProxyEndpointDataPathSuccess")
-    success_end = socket.find("bool ConnectionSocket::mtProxyEndpointUseCachedHostAddress", success_start)
-    success_body = socket[success_start:success_end]
+    success_start = endpoint_recorder.find("void MtProxyEndpointRecorder::recordDataPathSuccess")
+    success_end = len(endpoint_recorder)
+    success_body = endpoint_recorder[success_start:success_end]
     require(
         "MtProxyEndpointPolicy::recordDataPathSuccess" in success_body
         and "resetStateForKey(context.networkEndpointKey" in endpoint_policy
         and "resetStateForKey(context.endpointKey" in endpoint_policy,
         "endpoint data-path success must clear both host/port network cooldown and secret/SNI recipe cooldown",
     )
-    invalid_reason_guard = success_body.find('strcmp(reason, "first_tls_app_recv") != 0')
+    invalid_reason_guard = success_body.find("context.reason != MtProxyPhase::FirstTlsAppRecv")
     first_reset = success_body.find("MtProxyEndpointPolicy::recordDataPathSuccess")
     require(
-        'reason == nullptr' in success_body
-        and 'strcmp(reason, "first_tls_app_recv") != 0' in success_body
-        and 'strcmp(reason, "first_mtproxy_packet_recv") != 0' in success_body
+        "context.reason != MtProxyPhase::FirstTlsAppRecv" in success_body
+        and "context.reason != MtProxyPhase::FirstMtproxyPacketRecv" in success_body
         and "endpoint_data_path_success_rejected" in success_body
-        and "logTransportInvariant(\"endpoint_data_path_success\", \"invalid_reason\")" in success_body
+        and "callbacks.logInvariant(\"endpoint_data_path_success\", \"invalid_reason\")" in success_body
         and invalid_reason_guard != -1
         and first_reset != -1
         and invalid_reason_guard < first_reset,

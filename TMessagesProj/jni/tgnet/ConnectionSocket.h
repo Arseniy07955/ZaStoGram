@@ -15,7 +15,9 @@
 #include <string>
 #include "ConnectionSocketStateMachine.h"
 #include "mtproxy/MtProxyAdaptivePolicy.h"
+#include "mtproxy/MtProxyEndpointRecorder.h"
 #include "mtproxy/MtProxyOptions.h"
+#include "mtproxy/MtProxyProbeLease.h"
 
 class NativeByteBuffer;
 class ConnectionsManager;
@@ -157,7 +159,6 @@ private:
     bool canRunMtProxyPreTcpTimer(MtProxyStartupTimerKind expectedKind, uint32_t timerGeneration);
     void classifyMtProxyPreTcpTimeoutDiagnostic(const char *reason);
     std::string deriveMtProxyTerminalDiagnostic(int32_t reason, int32_t error);
-    bool mtProxyDiagnosticIsLocalSchedulerTimeout(const char *diagnostic);
     MtProxyStartupTimerKind mtProxyStartupTimerKindForMode(int32_t mode);
     void setMtProxySocketConnectedLogged(bool logged, const char *reason);
     bool canStartHostResolve();
@@ -183,21 +184,14 @@ private:
     bool scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6);
     bool mtProxyProbeBeginOrJoin(bool ipv6);
     void mtProxyProbeWaitTimerFire(bool ipv6);
-    void acquireMtProxyProbeLease(uint64_t token);
-    void releaseMtProxyProbeLease();
-    void mtProxyProbeHeartbeat();
-    uint64_t mtProxyProbeOwnerToken = 0;
-    std::string mtProxyProbeLeaseKey;
-    std::string mtProxyProbeLeaseEndpointKey;
-    std::string mtProxyProbeLeaseNetworkEndpointKey;
-    uint32_t mtProxyProbeLeaseAllowedSni = 0;
-    uint32_t mtProxyProbeLeaseActivationGeneration = 0;
+    MtProxyProbeLease mtProxyProbeLease;
     bool scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6);
     void releaseMtProxyEndpointTcpConnect(const char *reason);
     bool scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6);
-    void recordMtProxyEndpointFailure(const char *diagnostic, const char *reason);
-    void recordMtProxyEndpointHandshakeOk(const char *reason);
-    void recordMtProxyEndpointDataPathSuccess(const char *reason);
+    MtProxyEndpointRecorder::Callbacks mtProxyEndpointRecorderCallbacks();
+    MtProxyEndpointRecorder::FailureContext mtProxyEndpointFailureContext(const char *diagnostic, const char *reason);
+    MtProxyEndpointRecorder::SuccessContext mtProxyEndpointSuccessContext(const char *reason);
+    MtProxyEndpointRecorder::ProbeBackoffContext mtProxyEndpointProbeBackoffContext(uint32_t holdMs, uint32_t generation, const std::string &terminalPhase);
     void publishMtProxySocketObservation(const MtProxySocketObservation &observation);
     void publishSanitizedSecretDomainIfNeeded(size_t rawDomainLength);
     void closeMtProxyDnsBlockedZeroAddress(const std::string &host, const std::string &ip, const char *reason);

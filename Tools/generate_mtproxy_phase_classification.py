@@ -82,7 +82,7 @@ FUNCTIONS = (
         (
             "Local scheduler/gate timeouts: the wait was produced by our own\n"
             "pre-TCP machinery (admission queue, endpoint cooldown, gates), not\n"
-            "by the network. recordMtProxyEndpointFailure skips these so a local\n"
+            "by the network. MtProxyEndpointRecorder::recordFailure skips these so a local\n"
             "wake-up never counts as an endpoint failure. Deliberately excludes\n"
             "mtproxy_probe_wait_timeout and includes background_handshake_aborted."
         ),

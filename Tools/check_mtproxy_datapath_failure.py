@@ -83,8 +83,8 @@ def main() -> int:
         "firstTransportPacketSent = true;" in socket
         and "firstTransportPacketReceived = true;" in socket
         and "dataPathProven = true;" in socket
-        and 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")' in socket
-        and 'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in socket,
+        and 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_mtproxy_packet_recv"), mtProxyEndpointRecorderCallbacks())' in socket
+        and 'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())' in socket,
         "native socket must mark data-path proof only after first transport/appdata receive",
         failures,
     )
@@ -106,16 +106,16 @@ def main() -> int:
         failures,
     )
     require(
-        'recordMtProxyEndpointDataPathSuccess("first_tls_app_recv")' in socket
+        'MtProxyEndpointRecorder::recordDataPathSuccess(mtProxyEndpointSuccessContext("first_tls_app_recv"), mtProxyEndpointRecorderCallbacks())' in socket
         and "observation.phase = MtProxyPhase::FirstTlsAppRecv" in socket
         and "publishMtProxySocketObservation(observation)" in socket,
         "first_tls_app_recv must remain the FakeTLS usable success marker",
         failures,
     )
     require(
-        "recordMtProxyEndpointHandshakeOk(\"server_hello_hmac_ok\")" in socket
+        'MtProxyEndpointRecorder::recordHandshakeOk(mtProxyEndpointSuccessContext("server_hello_hmac_ok"), mtProxyEndpointRecorderCallbacks())' in socket
         and "setTransportState(TransportState::MtprotoReady, \"server_hello_hmac_ok\")" in socket
-        and "recordMtProxyEndpointDataPathSuccess(\"server_hello_hmac_ok\")" not in socket,
+        and "recordDataPathSuccess(mtProxyEndpointSuccessContext(\"server_hello_hmac_ok\")" not in socket,
         "server_hello_hmac_ok must remain only a handshake milestone, not data-path success",
         failures,
     )

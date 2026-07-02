@@ -93,7 +93,7 @@ public final class ProxyPhaseClassification {
 
     // Local scheduler/gate timeouts: the wait was produced by our own
     // pre-TCP machinery (admission queue, endpoint cooldown, gates), not
-    // by the network. recordMtProxyEndpointFailure skips these so a local
+    // by the network. MtProxyEndpointRecorder::recordFailure skips these so a local
     // wake-up never counts as an endpoint failure. Deliberately excludes
     // mtproxy_probe_wait_timeout and includes background_handshake_aborted.
     // Pass a ProxyCheckDiagnostics.normalize()d phase.
