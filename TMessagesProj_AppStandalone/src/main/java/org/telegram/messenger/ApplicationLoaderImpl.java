@@ -57,7 +57,8 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
 
-                    if (versionCode > BuildConfig.VERSION_CODE) {
+                    int currentBaseVersion = BuildConfig.VERSION_CODE / 10;
+                    if (versionCode > currentBaseVersion) {
                         pendingUpdate = new BetaUpdate(versionName, versionCode, changelog);
                     } else {
                         pendingUpdate = null;
@@ -80,7 +81,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
         String abi = Build.SUPPORTED_ABIS[0];
-        String downloadUrl = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork%2FTelegaNEW-standalone-" + abi + ".apk";
+        String downloadUrl = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/TelegaNEW-standalone-" + abi + ".apk";
 
         new AlertDialog.Builder(context)
                 .setTitle(LocaleController.getString(R.string.AppUpdate))

@@ -1508,7 +1508,7 @@ public class ConnectionsManager extends BaseController {
 
     public static int getMtProxyTlsProfileOverride() {
         SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences(MT_PROXY_TLS_PROFILE_PREFS, Context.MODE_PRIVATE);
-        return normalizeMtProxyTlsProfileOverride(preferences.getInt(MT_PROXY_TLS_PROFILE_OVERRIDE, MT_PROXY_TLS_PROFILE_AUTO));
+        return normalizeMtProxyTlsProfileOverride(preferences.getInt(MT_PROXY_TLS_PROFILE_OVERRIDE, MT_PROXY_TLS_PROFILE_AUTO_ROTATE));
     }
 
     public static void setMtProxyTlsProfileOverride(int profile) {
