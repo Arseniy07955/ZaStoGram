@@ -533,6 +533,21 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateConnectionState);
         getNotificationCenter().addObserver(this, NotificationCenter.newSuggestionsAvailable);
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.proxySettingsChanged);
+
+        if (currentAccount == 0 && !UserConfig.getInstance(currentAccount).isClientActivated()) {
+            SharedPreferences preferences = MessagesController.getGlobalMainSettings();
+            if (preferences.getBoolean("proxy_enabled", false)) {
+                String address = preferences.getString("proxy_ip", "");
+                if (!TextUtils.isEmpty(address)) {
+                    ConnectionsManager.setProxySettings(true, address,
+                            preferences.getInt("proxy_port", 1080),
+                            preferences.getString("proxy_user", ""),
+                            preferences.getString("proxy_pass", ""),
+                            preferences.getString("proxy_secret", ""));
+                }
+            }
+        }
+
         return super.onFragmentCreate();
     }
 

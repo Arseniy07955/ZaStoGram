@@ -819,6 +819,7 @@ public class SharedConfig {
             preferences = ApplicationLoader.applicationContext.getSharedPreferences("Notifications", Activity.MODE_PRIVATE);
             showNotificationsForAllAccounts = preferences.getBoolean("AllAccounts", true);
 
+            loadProxyList();
             configLoaded = true;
         }
     }
@@ -1682,7 +1683,7 @@ public class SharedConfig {
     }
 
     private static void ensureZaStoDefaultProxies(SharedPreferences preferences) {
-        if (preferences.getBoolean("proxies_za_sto_applied_v3", false)) {
+        if (preferences.getBoolean("proxies_za_sto_applied_v4", false)) {
             return;
         }
         // Seed: 0185e6912508d904febdb6df3e60cb49
@@ -1693,6 +1694,7 @@ public class SharedConfig {
         ProxyInfo info2 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "ee0185e6912508d904febdb6df3e60cb496e736b2e63646e2e636174706177732e7275");
         ProxyInfo info3 = new ProxyInfo("nsk.cdn.catpaws.ru", 443, "", "", "dd0185e6912508d904febdb6df3e60cb49");
 
+        proxyList.clear();
         proxyList.add(0, info3);
         proxyList.add(0, info2);
         proxyList.add(0, info1);
@@ -1700,7 +1702,7 @@ public class SharedConfig {
         currentProxy = info1;
 
         preferences.edit()
-                .putBoolean("proxies_za_sto_applied_v3", true)
+                .putBoolean("proxies_za_sto_applied_v4", true)
                 .putBoolean("proxy_enabled", true)
                 .putString("proxy_ip", info1.address)
                 .putInt("proxy_port", info1.port)
@@ -1709,6 +1711,8 @@ public class SharedConfig {
                 .putString("proxy_secret", info1.secret)
                 .apply();
 
+        ConnectionsManager.setProxySettings(true, info1.address, info1.port, info1.username, info1.password, info1.secret);
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         saveProxyList();
     }
 
