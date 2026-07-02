@@ -81,7 +81,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     @Override
     public boolean showCustomUpdateAppPopup(Context context, BetaUpdate update, int account) {
         String abi = Build.SUPPORTED_ABIS[0];
-        String downloadUrl = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/TelegaNEW-standalone-" + abi + ".apk";
+        String downloadUrl = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-" + abi + ".apk";
 
         new AlertDialog.Builder(context)
                 .setTitle(LocaleController.getString(R.string.AppUpdate))
