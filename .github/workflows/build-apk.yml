@@ -210,12 +210,18 @@ jobs:
     needs: build
     if: ${{ success() }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: TelegaNEW-standalone-*
           path: dist-release
           merge-multiple: true
+
+      - name: Stage update.json
+        run: cp update.json dist-release/update.json
 
       - name: Create per-run prerelease
         env:

@@ -694,6 +694,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(1004, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_data, getString(R.string.FreeProxyChannels), "Каталог каналов и настройки прокси"));
         // ZaStoGram — экран логов (всегда виден): просмотр, выборочная отправка, удаление.
         items.add(SettingCell.Factory.of(1005, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_logs, getString(R.string.ZaLogsTitle), "Просмотр и отправка логов"));
+        items.add(SettingCell.Factory.of(1006, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.summary_arrow, "Проверить обновления", "Поиск новой версии telegaNEW"));
         items.add(UItem.asShadow(null));
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
         items.add(SettingCell.Factory.of(2, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_chat, getString(R.string.SettingsChat), getString(R.string.SettingsChatInfo)));
@@ -839,6 +840,11 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 1005:
                 presentSettingFragment(new LogsActivity());
+                break;
+            case 1006:
+                if (getParentActivity() instanceof LaunchActivity) {
+                    ((LaunchActivity) getParentActivity()).checkAppUpdate(true, null);
+                }
                 break;
             case 7:
                 presentSettingFragment(new FiltersSetupActivity());

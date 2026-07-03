@@ -48,29 +48,44 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void checkUpdate(boolean force, Runnable whenDone) {
-        String url = "https://raw.githubusercontent.com/Arseniy07955/ZaStoGram/master/update.json";
+        // Use S3 for update.json to be consistent with APK storage
+        String url = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json";
+        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates at " + url);
         new HttpGetTask(result -> {
             if (result != null) {
+                if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check result: " + result);
                 try {
                     JSONObject json = new JSONObject(result);
                     int versionCode = json.getInt("version_code");
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
 
-                    int currentBaseVersion = BuildConfig.VERSION_CODE / 10;
-                    if (versionCode > currentBaseVersion) {
+                    // Simple but effective comparison: 
+                    // if one is 4 digits and other is 5, normalize to 5.
+                    int latest = versionCode;
+                    int current = BuildConfig.VERSION_CODE;
+                    if (latest < 10000) latest *= 10;
+                    if (current < 10000) current *= 10;
+
+                    if (latest > current) {
                         pendingUpdate = new BetaUpdate(versionName, versionCode, changelog);
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: new update available: " + versionName + " (" + latest + " > " + current + ")");
                     } else {
                         pendingUpdate = null;
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: no new update (current: " + current + ", latest: " + latest + ")");
                     }
                 } catch (Exception e) {
-                    FileLog.e(e);
+                    FileLog.e("telegaNEW: failed to parse update.json", e);
+                    pendingUpdate = null;
                 }
+            } else {
+                if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check failed (null result)");
+                pendingUpdate = null;
             }
             if (whenDone != null) {
                 whenDone.run();
             }
-        }).execute(url);
+        }).setHeader("User-Agent", "telegaNEW/" + BuildConfig.VERSION_NAME).execute(url);
     }
 
     @Override
