@@ -60,8 +60,10 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     int versionCode = json.getInt("version_code");
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
-                    int latest = versionCode > 100000 ? versionCode / 10 : versionCode;
-                    int current = BuildConfig.VERSION_CODE > 100000 ? BuildConfig.VERSION_CODE / 10 : BuildConfig.VERSION_CODE;
+                    // Robust normalization: bring both to base version (e.g. 6920)
+                    // If code is 5 digits or more (like 69251), it's base * 10 + abi
+                    int latest = versionCode >= 10000 ? versionCode / 10 : versionCode;
+                    int current = BuildConfig.VERSION_CODE >= 10000 ? BuildConfig.VERSION_CODE / 10 : BuildConfig.VERSION_CODE;
                     if (latest > current) {
                         pendingUpdate = new BetaUpdate(versionName, latest, changelog);
                     } else {
