@@ -13,7 +13,9 @@ import android.view.ViewGroup;
 
 import androidx.core.content.FileProvider;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+import org.telegram.messenger.browser.Browser;
 import org.telegram.messenger.web.BuildConfig;
 import org.telegram.messenger.web.R;
 import org.telegram.tgnet.ConnectionsManager;
@@ -30,12 +32,11 @@ import org.telegram.ui.IUpdateLayout;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.SMSStatsActivity;
 import org.telegram.ui.SMSSubscribeSheet;
-
-import org.telegram.messenger.browser.Browser;
 import org.telegram.ui.web.HttpGetFileTask;
 import org.telegram.ui.web.HttpGetTask;
 
 import java.io.File;
+import java.util.ArrayList;
 
 public class ApplicationLoaderImpl extends ApplicationLoader {
 
@@ -48,36 +49,86 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void checkUpdate(boolean force, Runnable whenDone) {
-        // Use S3 for update.json to be consistent with APK storage
         String url = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json";
-        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates at " + url);
+        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates and proxies at " + url);
         new HttpGetTask(result -> {
             if (result != null) {
-                if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check result: " + result);
                 try {
                     JSONObject json = new JSONObject(result);
+                    
+                    // 1. Process Update
                     int versionCode = json.getInt("version_code");
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
-
-                    // Robust normalization: bring both to base version (e.g. 6920)
                     int latest = versionCode > 100000 ? versionCode / 10 : versionCode;
                     int current = BuildConfig.VERSION_CODE > 100000 ? BuildConfig.VERSION_CODE / 10 : BuildConfig.VERSION_CODE;
-
                     if (latest > current) {
                         pendingUpdate = new BetaUpdate(versionName, latest, changelog);
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update available: " + versionName + " (" + latest + " > " + current + ")");
                     } else {
                         pendingUpdate = null;
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: up to date (current: " + current + ", latest: " + latest + ")");
+                    }
+
+                    // 2. Process Dynamic Proxies
+                    if (json.has("proxies")) {
+                        JSONArray proxies = json.getJSONArray("proxies");
+                        boolean listChanged = false;
+                        SharedConfig.ProxyInfo activeToSet = null;
+
+                        for (int i = 0; i < proxies.length(); i++) {
+                            JSONObject p = proxies.getJSONObject(i);
+                            String server = p.getString("server");
+                            int port = p.getInt("port");
+                            String secret = p.getString("secret");
+                            boolean isActive = p.optBoolean("active", false);
+                            boolean isDelete = p.optBoolean("delete", false);
+
+                            // Find if already exists by host and port
+                            SharedConfig.ProxyInfo existing = null;
+                            for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+                                if (server.equalsIgnoreCase(info.address) && port == info.port) {
+                                    existing = info;
+                                    break;
+                                }
+                            }
+
+                            if (isDelete) {
+                                if (existing != null) {
+                                    SharedConfig.deleteProxy(existing);
+                                    listChanged = true;
+                                }
+                                continue;
+                            }
+
+                            if (existing != null) {
+                                // Overwrite secret if changed
+                                if (!secret.equals(existing.secret)) {
+                                    existing.secret = secret;
+                                    listChanged = true;
+                                }
+                                if (isActive) activeToSet = existing;
+                            } else {
+                                // Add new
+                                SharedConfig.ProxyInfo newProxy = new SharedConfig.ProxyInfo(server, port, "", "", secret);
+                                SharedConfig.proxyList.add(0, newProxy);
+                                if (isActive) activeToSet = newProxy;
+                                listChanged = true;
+                            }
+                        }
+
+                        if (listChanged) {
+                            SharedConfig.saveProxyList();
+                        }
+
+                        // Auto-apply if marked active
+                        if (activeToSet != null) {
+                            SharedConfig.currentProxy = activeToSet;
+                            ConnectionsManager.setProxySettings(true, activeToSet.address, activeToSet.port, "", "", activeToSet.secret);
+                            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
+                        }
                     }
                 } catch (Exception e) {
                     FileLog.e("telegaNEW: failed to parse update.json", e);
-                    pendingUpdate = null;
                 }
-            } else {
-                if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update check failed (null result)");
-                pendingUpdate = null;
             }
             if (whenDone != null) {
                 whenDone.run();
