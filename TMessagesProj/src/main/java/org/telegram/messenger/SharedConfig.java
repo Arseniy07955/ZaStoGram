@@ -642,7 +642,7 @@ public class SharedConfig {
             proxyRotationTimeout = clampProxyRotationTimeout(preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX));
             showZapretVpnSponsor = preferences.getBoolean("showZapretVpnSponsor", true);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
-            mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
+            mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", false);
             mtProxyConnectionPatternMode = clampInt(preferences.getInt("mtProxyConnectionPatternMode", 0), 0, 4);
             mtProxyRecordSizingMode = clampInt(preferences.getInt("mtProxyRecordSizingMode", 0), 0, 2);
             mtProxyTimingMode = clampInt(preferences.getInt("mtProxyTimingMode", 0), 0, 2);

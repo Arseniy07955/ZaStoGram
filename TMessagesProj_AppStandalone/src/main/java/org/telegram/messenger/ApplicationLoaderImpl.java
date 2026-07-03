@@ -120,7 +120,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                 BulletinFactory.global().createErrorBulletin("Download failed").show();
             }
         }, progress -> {
-            // progress updates can be handled here if we had a progress bar in AlertDialog
+            progressDialog.setProgress((int) (progress * 100));
         }).execute(url);
     }
 
