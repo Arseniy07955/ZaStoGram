@@ -73,6 +73,7 @@ import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.Bitmaps;
 import org.telegram.messenger.BotWebViewVibrationEffect;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChannelBoostsController;
@@ -1826,6 +1827,14 @@ public class PeerStoriesView extends SizeNotifierFrameLayout implements Notifica
                                     popupMenu.dismiss();
                                 }
                             });
+                            if (currentStory.isVideo()) {
+                                ActionBarMenuItem.addItem(popupLayout, R.drawable.msg_gallery, getString(R.string.SaveCurrentFrame), false, resourcesProvider).setOnClickListener(v -> {
+                                    saveCurrentFrameToGallery();
+                                    if (popupMenu != null) {
+                                        popupMenu.dismiss();
+                                    }
+                                });
+                            }
                         }
 
                         if (!MessagesController.getInstance(currentAccount).premiumFeaturesBlocked() && !currentStory.isLive && !isChannel) {
@@ -2073,6 +2082,14 @@ public class PeerStoriesView extends SizeNotifierFrameLayout implements Notifica
                                         popupMenu.dismiss();
                                     }
                                 });
+                                if (currentStory.isVideo()) {
+                                    ActionBarMenuItem.addItem(popupLayout, R.drawable.msg_gallery, getString(R.string.SaveCurrentFrame), false, resourcesProvider).setOnClickListener(v -> {
+                                        saveCurrentFrameToGallery();
+                                        if (popupMenu != null) {
+                                            popupMenu.dismiss();
+                                        }
+                                    });
+                                }
                             } else if (!MessagesController.getInstance(currentAccount).premiumFeaturesBlocked()) {
                                 Drawable lockIcon = ContextCompat.getDrawable(context, R.drawable.msg_gallery_locked2);
                                 lockIcon.setColorFilter(new PorterDuffColorFilter(ColorUtils.blendARGB(Color.WHITE, Color.BLACK, 0.5f), PorterDuff.Mode.MULTIPLY));
@@ -3744,6 +3761,48 @@ public class PeerStoriesView extends SizeNotifierFrameLayout implements Notifica
         } else {
             showDownloadAlert();
         }
+    }
+
+    private void saveCurrentFrameToGallery() {
+        if (currentStory.storyItem == null && currentStory.uploadingStory == null || !currentStory.isVideo() || currentStory.isLive) {
+            return;
+        }
+        Bitmap bitmap = captureCurrentFrameBitmap();
+        if (bitmap == null) {
+            showCurrentFrameSaveError();
+            return;
+        }
+        MediaController.saveBitmapToGallery(bitmap, getContext(), uri -> {
+            if (uri != null) {
+                BulletinFactory.createSaveToGalleryBulletin(storyContainer, false, resourcesProvider).show();
+            } else {
+                showCurrentFrameSaveError();
+            }
+        });
+    }
+
+    private Bitmap captureCurrentFrameBitmap() {
+        if (playerSharedScope == null || !playerSharedScope.firstFrameRendered) {
+            return null;
+        }
+        TextureView textureView = playerSharedScope.textureView;
+        if (textureView != null && textureView.isAvailable() && textureView.getWidth() > 0 && textureView.getHeight() > 0) {
+            Bitmap bitmap = textureView.getBitmap();
+            if (bitmap != null && !bitmap.isRecycled()) {
+                return bitmap;
+            }
+        }
+        SurfaceView surfaceView = playerSharedScope.surfaceView;
+        if (surfaceView != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && surfaceView.getWidth() > 0 && surfaceView.getHeight() > 0 && surfaceView.getHolder().getSurface().isValid()) {
+            Bitmap bitmap = Bitmaps.createBitmap(surfaceView.getWidth(), surfaceView.getHeight(), Bitmap.Config.ARGB_8888);
+            AndroidUtilities.getBitmapFromSurface(surfaceView, bitmap);
+            return bitmap;
+        }
+        return null;
+    }
+
+    private void showCurrentFrameSaveError() {
+        BulletinFactory.of(storyContainer, resourcesProvider).createSimpleBulletin(R.raw.error, getString(R.string.UnknownError)).show();
     }
 
     private void showDownloadAlert() {

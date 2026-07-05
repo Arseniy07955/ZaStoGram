@@ -172,7 +172,7 @@ def main() -> int:
     require("beginOrJoin" in coordinator_h and "beginOrJoin" in coordinator_cpp, "coordinator must implement beginOrJoin", failures)
     require("state.status == ProbeStatus::WORKING_RECIPE_FOUND" in coordinator_cpp, "working recipe reuse must also cover the successful default level-0 recipe", failures)
     require("completeFailure" in coordinator_h and "completeSuccess" in coordinator_h and "completeProfilesExhausted" in coordinator_h, "coordinator must own recipe success/failure/exhaustion transitions", failures)
-    require("uint32_t activationGeneration" in coordinator_h and "ProbeKey" in coordinator_h, "coordinator ProbeKey must carry activationGeneration", failures)
+    require("uint32_t configGeneration" in coordinator_h and "ProbeKey" in coordinator_h, "coordinator ProbeKey must carry configGeneration for budget/quarantine state", failures)
     require("FakeTlsHandshakeBudget" in coordinator_cpp and "responseSignature" in coordinator_h and "terminalBudgetExhausted" in coordinator_h, "coordinator must own endpoint/probe/generation FakeTLS budget verdicts", failures)
     require("MT_PROXY_FAKETLS_BUDGET_HOLD_MS" in coordinator_cpp and "30 * 1000" in coordinator_cpp and "MT_PROXY_FAKETLS_BUDGET_MAX_OWNER_ATTEMPTS" in coordinator_cpp and "MT_PROXY_FAKETLS_BUDGET_REPEATED_SIGNATURE_LIMIT" in coordinator_cpp, "FakeTLS budget must cap owner attempts/signatures and hold terminal verdicts for 30 seconds", failures)
     require("MT_PROXY_PROBE_EXHAUSTED_HOLD_MS" in coordinator_cpp and "30 * 1000" in coordinator_cpp, "profile exhaustion must be a short recovery debounce, not a 15-minute unsupported quarantine", failures)

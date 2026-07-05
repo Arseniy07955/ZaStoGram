@@ -46,7 +46,7 @@ enum class ProbeStatus : uint8_t {
 struct FakeTlsHandshakeBudget {
     std::string endpointKey;
     std::string probeKey;
-    uint32_t activationGeneration = 0;
+    uint32_t configGeneration = 0;
     std::string failureClass;
     uint32_t ownerAttempts = 0;
     int64_t firstFailureAtMs = 0;
@@ -173,9 +173,9 @@ MtProxyProbeCoordinator::Decision MtProxyProbeCoordinator::beginOrJoin(const Pro
     MtProxyProbeState &state = mtProxyProbeStates[probeKey.key];
     state.endpointKey = probeKey.endpointKey;
     state.networkEndpointKey = probeKey.networkEndpointKey;
-    if (probeKey.activationGeneration != 0
-            && state.fakeTlsHandshakeBudget.activationGeneration != 0
-            && state.fakeTlsHandshakeBudget.activationGeneration != probeKey.activationGeneration) {
+    if (probeKey.configGeneration != 0
+            && state.fakeTlsHandshakeBudget.configGeneration != 0
+            && state.fakeTlsHandshakeBudget.configGeneration != probeKey.configGeneration) {
         clearFakeTlsHandshakeBudget(state);
         if (state.status == ProbeStatus::HANDSHAKE_BUDGET_BACKOFF) {
             state.status = ProbeStatus::IDLE;
@@ -277,6 +277,7 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
                                                                                 bool recipeUsesGrease,
                                                                                 bool recipeIsGreaseProbe,
                                                                                 bool classicFallbackAllowed,
+                                                                                bool advanceRecipe,
                                                                                 int64_t now) {
     FailureResult result;
     if (probeKey.key.empty() || !failureNeedsRecipe(diagnostic)) {
@@ -307,7 +308,7 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
     bool currentOwnerAttempt = state.ownerToken != 0 && callerToken == state.ownerToken;
     if (currentOwnerAttempt && !budgetFailureClass.empty()) {
         FakeTlsHandshakeBudget &budget = state.fakeTlsHandshakeBudget;
-        bool resetBudget = budget.activationGeneration != probeKey.activationGeneration
+        bool resetBudget = budget.configGeneration != probeKey.configGeneration
                 || budget.failureClass != budgetFailureClass
                 || budget.probeKey != probeKey.key;
         if (resetBudget) {
@@ -315,7 +316,7 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
         }
         budget.endpointKey = probeKey.endpointKey;
         budget.probeKey = probeKey.key;
-        budget.activationGeneration = probeKey.activationGeneration;
+        budget.configGeneration = probeKey.configGeneration;
         budget.failureClass = budgetFailureClass;
         if (budget.firstFailureAtMs == 0) {
             budget.firstFailureAtMs = now;
@@ -356,6 +357,17 @@ MtProxyProbeCoordinator::FailureResult MtProxyProbeCoordinator::completeFailure(
         result.budgetAttempts = budget.ownerAttempts;
         result.budgetElapsedMs = std::max<int64_t>(0, budget.lastFailureAtMs - budget.firstFailureAtMs);
         result.responseSignature = budget.responseSignature;
+    }
+
+    if (!advanceRecipe) {
+        state.lastRecipeDiagnostic = diagnostic;
+        result.recorded = true;
+        result.generation = state.generation;
+        result.cursor = state.cursor;
+        result.cachedCursor = state.workingCursor;
+        result.lastRecipeDiagnostic = state.lastRecipeDiagnostic;
+        pthread_mutex_unlock(&mtProxyProbeCoordinatorMutex);
+        return result;
     }
 
     if (recipeUsesGrease && recipeIsGreaseProbe) {
@@ -601,6 +613,10 @@ bool MtProxyProbeCoordinator::failureNeedsRecipe(const std::string &diagnostic) 
     }
     MtProxyRecoveryAction action = mtProxyRecoveryActionForPhase(diagnostic, 0);
     return mtProxyRecoveryActionAdvancesRecipe(action);
+}
+
+bool MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(const std::string &diagnostic, uint64_t responseSignature) {
+    return !fakeTlsBudgetFailureClassForPhase(diagnostic, responseSignature).empty();
 }
 
 MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe(const std::string &probeKey) {

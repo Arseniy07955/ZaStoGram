@@ -51,6 +51,7 @@ protected:
     void onConnected() override;
     bool hasPendingRequests() override;
     std::string proxyConnectionStageOrigin() override;
+    std::string proxyConnectionStageSocketRole() override;
     void reconnect();
 
 private:

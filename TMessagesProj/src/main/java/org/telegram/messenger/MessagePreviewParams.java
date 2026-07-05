@@ -127,6 +127,55 @@ public class MessagePreviewParams {
             }
         }
 
+        public void replacePreviewMessages(ArrayList<MessageObject> newPreviewMessages) {
+            previewMessages.clear();
+            groupedMessagesMap.clear();
+            pollChosenAnswers.clear();
+            hasSpoilers = false;
+            hasText = false;
+            if (newPreviewMessages == null) {
+                return;
+            }
+            for (int i = 0; i < newPreviewMessages.size(); i++) {
+                MessageObject previewMessage = newPreviewMessages.get(i);
+                if (previewMessage == null) {
+                    continue;
+                }
+                previewMessage.messageOwner.dialog_id = dialogId;
+                if (!hasSpoilers) {
+                    for (TLRPC.MessageEntity e : previewMessage.messageOwner.entities) {
+                        if (e instanceof TLRPC.TL_messageEntitySpoiler) {
+                            hasSpoilers = true;
+                            break;
+                        }
+                    }
+                }
+                if (previewMessage.getGroupId() != 0) {
+                    MessageObject.GroupedMessages groupedMessages = groupedMessagesMap.get(previewMessage.getGroupId(), null);
+                    if (groupedMessages == null) {
+                        groupedMessages = new MessageObject.GroupedMessages();
+                        groupedMessagesMap.put(previewMessage.getGroupId(), groupedMessages);
+                    }
+                    groupedMessages.messages.add(previewMessage);
+                }
+                previewMessages.add(previewMessage);
+            }
+            for (int i = 0; i < groupedMessagesMap.size(); i++) {
+                groupedMessagesMap.valueAt(i).calculate();
+            }
+            if (groupedMessagesMap != null && groupedMessagesMap.size() > 0) {
+                MessageObject.GroupedMessages group = groupedMessagesMap.valueAt(0);
+                hasText = group.findCaptionMessageObject() != null;
+            } else if (previewMessages.size() == 1) {
+                MessageObject msg = previewMessages.get(0);
+                if (msg.type == MessageObject.TYPE_TEXT || msg.type == MessageObject.TYPE_EMOJIS) {
+                    hasText = !TextUtils.isEmpty(msg.messageText);
+                } else {
+                    hasText = !TextUtils.isEmpty(msg.caption);
+                }
+            }
+        }
+
         public void getSelectedMessages(ArrayList<MessageObject> messagesToForward) {
             messagesToForward.clear();
             for (int i = 0; i < messages.size(); i++) {
@@ -180,6 +229,7 @@ public class MessagePreviewParams {
     public boolean hideForwardSendersName;
     public boolean hideCaption;
     public boolean willSeeSenders;
+    public EditableForwardDraft editableForwardDraft;
 
     public boolean singleLink;
     public boolean hasMedia;
@@ -384,6 +434,7 @@ public class MessagePreviewParams {
         hasSenders = false;
         isSecret = DialogObject.isEncryptedDialog(dialogId);
         multipleUsers = false;
+        forwardDialogId = dialogId;
 
         if (forwardMessages != null) {
             ArrayList<String> hiddenSendersName = new ArrayList<>();
@@ -404,6 +455,10 @@ public class MessagePreviewParams {
             this.forwardMessages = new Messages(true, 0, forwardMessages, dialogId, this.forwardMessages != null ? this.forwardMessages.selectedIds : null);
             if (this.forwardMessages.messages.isEmpty()) {
                 this.forwardMessages = null;
+            }
+            if (editableForwardDraft != null && editableForwardDraft.isEnabled()) {
+                editableForwardDraft = new EditableForwardDraft(forwardMessages, this.forwardMessages != null ? this.forwardMessages.selectedIds : null, hideCaption);
+                rebuildForwardPreviewFromDraft();
             }
 
             ArrayList<Long> uids = new ArrayList<>();
@@ -429,7 +484,69 @@ public class MessagePreviewParams {
             }
         } else {
             this.forwardMessages = null;
+            editableForwardDraft = null;
         }
+    }
+
+    private long forwardDialogId;
+
+    public boolean enableEditableForwarding(boolean hideCaptions) {
+        if (forwardMessages == null || forwardMessages.messages == null || forwardMessages.messages.isEmpty()) {
+            return false;
+        }
+        editableForwardDraft = new EditableForwardDraft(forwardMessages.messages, forwardMessages.selectedIds, hideCaptions);
+        hideForwardSendersName = true;
+        rebuildForwardPreviewFromDraft();
+        return true;
+    }
+
+    public void disableEditableForwarding() {
+        if (editableForwardDraft == null) {
+            return;
+        }
+        ArrayList<MessageObject> messages = editableForwardDraft.getSourceMessages();
+        editableForwardDraft = null;
+        updateForward(messages, forwardDialogId);
+    }
+
+    public boolean isEditableForwardingEnabled() {
+        return editableForwardDraft != null && editableForwardDraft.isEnabled();
+    }
+
+    public EditableForwardDraft getEditableForwardDraftForSend() {
+        if (!isEditableForwardingEnabled() || forwardMessages == null) {
+            return null;
+        }
+        editableForwardDraft.syncSelectedIds(forwardMessages.selectedIds);
+        return editableForwardDraft;
+    }
+
+    public boolean editEditableForwardCaption(int messageId, String caption, ArrayList<TLRPC.MessageEntity> entities) {
+        if (!isEditableForwardingEnabled()) {
+            return false;
+        }
+        boolean changed = editableForwardDraft.setCaption(messageId, caption, entities);
+        if (changed) {
+            rebuildForwardPreviewFromDraft();
+        }
+        return changed;
+    }
+
+    public void setEditableForwardGroupingMode(EditableForwardDraft.GroupingMode mode) {
+        if (!isEditableForwardingEnabled()) {
+            return;
+        }
+        editableForwardDraft.setGroupingMode(mode);
+        rebuildForwardPreviewFromDraft();
+    }
+
+    public void rebuildForwardPreviewFromDraft() {
+        if (!isEditableForwardingEnabled() || forwardMessages == null) {
+            return;
+        }
+        editableForwardDraft.syncSelectedIds(forwardMessages.selectedIds);
+        int account = forwardMessages.messages != null && !forwardMessages.messages.isEmpty() ? forwardMessages.messages.get(0).currentAccount : UserConfig.selectedAccount;
+        forwardMessages.replacePreviewMessages(editableForwardDraft.buildPreviewMessages(account, forwardDialogId, this));
     }
 
     public int getForwardedMessagesCount() {

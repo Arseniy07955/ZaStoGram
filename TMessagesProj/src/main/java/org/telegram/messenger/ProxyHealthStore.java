@@ -243,6 +243,46 @@ final class ProxyHealthStore {
         return rememberEndpointFailure(state, proxyInfo, normalized, now, "live_failure", suggestedHoldMs);
     }
 
+    static void rememberLifecycleTelemetry(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        if (proxyInfo == null || event == null) {
+            return;
+        }
+        String normalized = ProxyCheckDiagnostics.normalize(event.phase);
+        if (verdict != null && verdict.usableSuccess) {
+            rememberBackgroundUsableSuccess(proxyInfo, normalized, event.timestamp, event.origin.wireName, event.socketRole.wireName);
+            return;
+        }
+        String key = ProxyEndpointKey.forPhase(proxyInfo, normalized);
+        if (key == null) {
+            key = ProxyEndpointKey.exact(proxyInfo);
+        }
+        if (key == null) {
+            return;
+        }
+        EndpointState state = endpointStateForKey(key);
+        state.lifecycleTelemetryPhase = normalized;
+        state.lifecycleTelemetryTime = event.timestamp;
+        logControl("owner=ProxyHealthStore.rememberLifecycleTelemetry decision=lifecycle_telemetry phase=" + normalized + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " endpoint=" + ProxyEndpointKey.endpoint(proxyInfo));
+    }
+
+    static void rememberBackgroundUsableSuccess(SharedConfig.ProxyInfo proxyInfo, long now) {
+        rememberBackgroundUsableSuccess(proxyInfo, ProxyCheckDiagnostics.OK, now, "unknown", "unknown");
+    }
+
+    static void rememberBackgroundUsableSuccess(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, String origin, String role) {
+        String key = ProxyEndpointKey.exact(proxyInfo);
+        if (key == null) {
+            return;
+        }
+        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
+        rememberEndpointBackgroundUsableSuccess(endpointStateForKey(key), normalized, now);
+        String networkKey = ProxyEndpointKey.network(proxyInfo);
+        if (networkKey != null && !networkKey.equals(key)) {
+            rememberEndpointBackgroundUsableSuccess(endpointStateForKey(networkKey), normalized, now);
+        }
+        logControl("owner=ProxyHealthStore.rememberBackgroundUsableSuccess decision=background_usable_success phase=" + normalized + " origin=" + origin + " role=" + role + " endpoint=" + ProxyEndpointKey.endpoint(proxyInfo));
+    }
+
     static void rememberConnected(SharedConfig.ProxyInfo proxyInfo, long now) {
         String key = ProxyEndpointKey.exact(proxyInfo);
         if (key == null) {
@@ -423,6 +463,13 @@ final class ProxyHealthStore {
         }
     }
 
+    private static void rememberEndpointBackgroundUsableSuccess(EndpointState state, String diagnostic, long now) {
+        state.lifecycleTelemetryPhase = ProxyCheckDiagnostics.normalize(diagnostic);
+        state.lifecycleTelemetryTime = now;
+        state.lastBackgroundUsableSuccessTime = now;
+        state.lastBackgroundUsablePhase = state.lifecycleTelemetryPhase;
+    }
+
     private static EndpointFailureResult rememberEndpointFailure(EndpointState state, SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, String source, int suggestedHoldMs) {
         state.usableSuccessUntil = 0;
         state.postSuccessDataPathShadowCount = 0;
@@ -539,7 +586,7 @@ final class ProxyHealthStore {
 
     private static void logControl(String message) {
         if (BuildVars.LOGS_ENABLED) {
-            FileLog.d("proxy_control " + message);
+            FileLog.d("proxy_control " + (message.contains("owner=") ? message : "owner=ProxyHealthStore " + message));
         }
     }
 
@@ -580,5 +627,9 @@ final class ProxyHealthStore {
         long lastUsableSuccessTime;
         long rotatedAwayUntil;
         int postSuccessDataPathShadowCount;
+        String lifecycleTelemetryPhase = ProxyCheckDiagnostics.UNKNOWN_FAIL;
+        long lifecycleTelemetryTime;
+        String lastBackgroundUsablePhase = ProxyCheckDiagnostics.UNKNOWN_FAIL;
+        long lastBackgroundUsableSuccessTime;
     }
 }

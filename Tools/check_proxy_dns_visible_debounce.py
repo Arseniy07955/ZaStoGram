@@ -70,6 +70,8 @@ def run_runtime_log_checks(failures: list[str]) -> None:
         fast_bad = session / "fast_bad_markers.txt"
         fast_good = session / "fast_good_markers.txt"
         slow_good = session / "slow_good_markers.txt"
+        stale_bad = session / "stale_bad_markers.txt"
+        stale_good = session / "stale_good_markers.txt"
         fast_bad.write_text(
             runtime_lines(
                 "\n".join(
@@ -103,6 +105,29 @@ def run_runtime_log_checks(failures: list[str]) -> None:
             ),
             encoding="utf-8",
         )
+        stale_bad.write_text(
+            runtime_lines(
+                "\n".join(
+                    [
+                        "logcat.txt:2: 06-25 20:31:30.010 proxy_control decision=telemetry_only source=native_stage origin=active_socket role=control_main account=0 phase=dns_coalesce_wait endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army activation_generation=69",
+                        "logcat.txt:3: 06-25 20:31:30.860 proxy_control owner=ProxyVisibleStateStore.promotePendingDnsVisiblePhase decision=ignored_stale_generation source=native_stage origin=active_socket role=control_main account=0 phase=dns_coalesce_wait endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army activation_generation=69",
+                        "logcat.txt:4: 06-25 20:31:30.870 proxy_control decision=visible_delayed_dns source=native_stage origin=active_socket role=control_main account=0 phase=dns_coalesce_wait endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army activation_generation=69",
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
+        stale_good.write_text(
+            runtime_lines(
+                "\n".join(
+                    [
+                        "logcat.txt:2: 06-25 20:31:30.010 proxy_control decision=telemetry_only source=native_stage origin=active_socket role=control_main account=0 phase=dns_coalesce_wait endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army activation_generation=69",
+                        "logcat.txt:3: 06-25 20:31:30.860 proxy_control owner=ProxyVisibleStateStore.promotePendingDnsVisiblePhase decision=ignored_stale_generation source=native_stage origin=active_socket role=control_main account=0 phase=dns_coalesce_wait endpoint=sberbank.dns.army:45631:ee:sberbank.dns.army activation_generation=69",
+                    ]
+                )
+            ),
+            encoding="utf-8",
+        )
 
         fast_bad_result = subprocess.run(
             [sys.executable, str(RUNTIME_LOG_VERIFIER), str(fast_bad)],
@@ -119,9 +144,25 @@ def run_runtime_log_checks(failures: list[str]) -> None:
             failures,
         )
 
+        stale_bad_result = subprocess.run(
+            [sys.executable, str(RUNTIME_LOG_VERIFIER), str(stale_bad)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        require(
+            stale_bad_result.returncode != 0
+            and "stale DNS generation promoted as visible" in stale_bad_result.stderr,
+            "runtime log verifier must reject visible_delayed_dns after ignored_stale_generation for the same DNS generation",
+            failures,
+        )
+
         for path, message in (
             (fast_good, "runtime log verifier must allow fast DNS telemetry when it stays telemetry_only"),
             (slow_good, "runtime log verifier must allow DNS to become visible after debounce expiry"),
+            (stale_good, "runtime log verifier must allow stale DNS telemetry when it stays ignored_stale_generation"),
         ):
             result = subprocess.run(
                 [sys.executable, str(RUNTIME_LOG_VERIFIER), str(path)],
@@ -171,6 +212,13 @@ def main() -> int:
         "visible state store must clear stale pending DNS visible writes when a later endpoint event arrives",
         failures,
     )
+    stale_dns_idx = promote_helper.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)")
+    mirror_dns_idx = promote_helper.find("ProxyStatusMirror.mirrorVisiblePhase")
+    require(
+        stale_dns_idx >= 0 and mirror_dns_idx >= 0 and stale_dns_idx < mirror_dns_idx,
+        "delayed DNS promotion must reject stale activation generations before visible mirror",
+        failures,
+    )
     for phase, constant in DNS_TELEMETRY_PHASES:
         require(
             f"ProxyCheckDiagnostics.{constant}" in visible_store
@@ -181,7 +229,7 @@ def main() -> int:
 
     delay_idx = on_native_stage.find("ProxyVisibleStateStore.shouldDelayDnsVisiblePhase(event.phase)")
     dns_connection_hold_idx = on_native_stage.find("shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)")
-    visible_write_idx = on_native_stage.find("if (selectedAccountStage && verdict.canOverwriteVisible)")
+    visible_write_idx = on_native_stage.find("if (selectedAccountStage && visibleOwner && verdict.canOverwriteVisible)")
     require(
         delay_idx >= 0
         and visible_write_idx >= 0
@@ -195,7 +243,7 @@ def main() -> int:
         and visible_write_idx >= 0
         and dns_connection_hold_idx < visible_write_idx
         and "ProxyCheckDiagnostics.CONNECTION_NOT_STARTED" in store
-        and "previous_dns_outage" in store
+        and "previous_dns_outage" in on_native_stage
         and 'return new ProxyRuntimeStateStore.Decision("telemetry_only", event.phase, event.endpointKey, verdict, false, false, false)' in on_native_stage,
         "connection_not_started after a DNS outage/resolve failure must stay telemetry_only before visible mirror/backoff/rotation",
         failures,

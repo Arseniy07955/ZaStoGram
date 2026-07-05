@@ -313,7 +313,7 @@ def main() -> int:
     helper = method_body(visible, "static boolean shouldHoldLivePhaseByUsableSuccess")
     live_hold_idx = native_stage.find("decision=held_live_by_usable_success")
     connected_hold_idx = native_stage.find("decision=held_live_by_current_proxy_usable")
-    visible_write_idx = native_stage.find("if (selectedAccountStage && verdict.canOverwriteVisible)")
+    visible_write_idx = native_stage.find("if (selectedAccountStage && visibleOwner && verdict.canOverwriteVisible)")
     helper_call_idx = native_stage.find("ProxyVisibleStateStore.shouldHoldLivePhaseByUsableSuccess(currentProxy, event)")
     require(
         helper
@@ -419,7 +419,7 @@ def main() -> int:
     force_visible_idx = mark_start.find("boolean forceVisibleActivation")
     force_clear_idx = mark_start.find("ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName)")
     force_return_idx = mark_start.find("return true;", force_clear_idx)
-    mark_visible_idx = mark_start.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now)", connect_start_hold_idx)
+    mark_visible_idx = mark_start.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin)", connect_start_hold_idx)
     require(
         connect_start_hold_idx >= 0
         and mark_visible_idx >= 0
@@ -505,14 +505,15 @@ def main() -> int:
     require(
         "ProxyRuntimeStateStore.isCurrentProxyUsable(currentProxy)" in complete_attempt
         and "SwitchDecision.held" in complete_attempt
-        and complete_attempt.find("isCurrentProxyUsable") < complete_attempt.find("markEndpointFailure"),
+        and complete_attempt.find("isCurrentProxyUsable") < complete_attempt.find("ProxyConnectionEvent.rotationTimeout"),
         "rotation engine must hold scheduled attempts before marking connecting timeout failure",
         failures,
     )
-    should_schedule = method_body(store, "public static boolean shouldScheduleFallback")
     require(
-        "isCurrentProxyUsable(currentProxy" in should_schedule,
-        "fallback scheduling must treat fresh usable success or connected/updating current proxy as usable",
+        "rotationTrigger" in rotation
+        and "ignored_non_rotation_trigger" in rotation
+        and "ProxyRuntimeStateStore.isCurrentProxyUsable(SharedConfig.currentProxy)" in rotation,
+        "fallback scheduling must rely on reducer rotationTrigger and still cancel pending switches on current-proxy usable success",
         failures,
     )
 

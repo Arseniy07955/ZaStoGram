@@ -21,7 +21,7 @@ CONNECTION_RE = re.compile(r"connection\((0x[0-9a-fA-F]+)\)")
 # log format without zero padding ("7-2 11:48:40.760"); with the strict
 # two-digit form every time-window rule silently no-ops on native logs.
 LOG_TIME_RE = re.compile(r"\b(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})\b")
-PROXY_CONTROL_RE = re.compile(r"proxy_control decision=([^ ]+)")
+PROXY_CONTROL_RE = re.compile(r"proxy_control(?: [^ ]+=[^ ]+)* decision=([^ ]+)")
 FIELD_RE_TEMPLATE = r"(?<![A-Za-z0-9_]){}=([^ ]+)"
 EMPTY_DOH_NAME_RE = re.compile(r"https://[^ ]+/(?:resolve|dns-query)\?name=(?:&|$)")
 DISCONNECT_REQUIRED_FIELDS = (
@@ -33,6 +33,22 @@ DISCONNECT_REQUIRED_FIELDS = (
 ALLOWED_DATA_PATH_REASONS = {"first_tls_app_recv", "first_mtproxy_packet_recv"}
 FAILURE_EVIDENCE_CLASSES = evidence_classes()
 ACTIVE_SOCKET_ORIGINS = {"active_socket", "active_proxy"}
+VISIBLE_OWNER_ORIGINS = ACTIVE_SOCKET_ORIGINS | {"settings_change", "user_select", "rotation_candidate"}
+VISIBLE_OWNER_ROLES = {"", "control_main"}
+HEALTH_ONLY_ORIGINS = {"startup_restore", "background_keepalive"}
+HEALTH_ONLY_ROLES = {"media_visible", "media_prefetch", "control_secondary", "background_keepalive", "startup_restore", "proxy_check"}
+VISIBLE_OR_ROTATION_DECISIONS = {
+    "visible_usable_success",
+    "visible_only",
+    "backoff",
+    "rotation_trigger",
+    "terminal_quarantine",
+}
+LIFECYCLE_HEALTH_ONLY_DECISIONS = {
+    "lifecycle_health_only",
+    "lifecycle_data_path_timeout_telemetry_only",
+    "resume_grace_health_only",
+}
 RECIPE_FAILURE_MARKERS = ("mtproxy_startup recipe_failed", "mtproxy_startup recipe_exhausted")
 USABLE_SUCCESS_PROXY_PHASES = {"first_tls_app_recv", "first_mtproxy_packet_recv"}
 NATIVE_SOCKET_OBSERVATION_FACADE_PHASES = observation_facade_phases()
@@ -342,8 +358,23 @@ def verify_visible_success_hold(lines: list[str]) -> list[str]:
         phase = line_field(line, "phase")
         endpoint = line_field(line, "endpoint")
         origin = line_field(line, "origin")
-        if decision in {"visible_usable_success", "visible_only"} and origin and origin not in ACTIVE_SOCKET_ORIGINS:
-            failures.append(f"non-active origin mirrored as active visible status: {line}")
+        role = line_field(line, "role")
+        if decision in {"visible_usable_success", "visible_only"} and origin and origin not in VISIBLE_OWNER_ORIGINS:
+            failures.append(f"non-visible origin mirrored as active visible status: {line}")
+            continue
+        if decision in {"visible_usable_success", "visible_only"} and role not in VISIBLE_OWNER_ROLES:
+            failures.append(f"non-control socket role mirrored as active visible status: {line}")
+            continue
+        if decision in VISIBLE_OR_ROTATION_DECISIONS and (
+            origin in HEALTH_ONLY_ORIGINS or role in HEALTH_ONLY_ROLES
+        ):
+            failures.append(f"lifecycle health-only event reached visible/backoff/rotation path: {line}")
+            continue
+        if decision in LIFECYCLE_HEALTH_ONLY_DECISIONS:
+            if "owner=" not in line:
+                failures.append(f"lifecycle health-only decision missing owner provenance: {line}")
+            if "role=" not in line:
+                failures.append(f"lifecycle health-only decision missing socket role: {line}")
             continue
         if decision == "visible_usable_success" and phase in USABLE_SUCCESS_PROXY_PHASES:
             usable_successes.append((line_time_ms(line), endpoint, line))
@@ -498,12 +529,14 @@ def verify_usable_hold_anchor(lines: list[str]) -> list[str]:
 def verify_dns_visible_debounce(lines: list[str]) -> list[str]:
     failures: list[str] = []
     telemetry: list[tuple[int | None, str, str, str]] = []
+    stale_dns_generations: list[tuple[str, str, str, str]] = []
     for line in lines:
         decision = proxy_control_decision(line)
         if not decision:
             continue
         phase = line_field(line, "phase")
         endpoint = line_field(line, "endpoint")
+        activation_generation = line_field(line, "activation_generation")
         current_time = line_time_ms(line)
         if decision == "visible_only" and phase in DNS_VISIBLE_TELEMETRY_PHASES:
             failures.append(f"short DNS telemetry mirrored as visible; use telemetry_only/visible_delayed_dns: {line}")
@@ -511,11 +544,18 @@ def verify_dns_visible_debounce(lines: list[str]) -> list[str]:
         if decision == "telemetry_only" and phase in DNS_VISIBLE_TELEMETRY_PHASES:
             telemetry.append((current_time, endpoint, phase, line))
             continue
+        if decision == "ignored_stale_generation" and phase in DNS_VISIBLE_TELEMETRY_PHASES and activation_generation:
+            stale_dns_generations.append((endpoint, phase, activation_generation, line))
+            continue
         if decision != "visible_delayed_dns":
             continue
         if phase not in DNS_VISIBLE_TELEMETRY_PHASES:
             failures.append(f"visible_delayed_dns used for non-DNS phase: {line}")
             continue
+        for stale_endpoint, stale_phase, stale_generation, stale_line in stale_dns_generations:
+            if stale_phase == phase and stale_generation == activation_generation and same_proxy_endpoint(stale_endpoint, endpoint):
+                failures.append(f"stale DNS generation promoted as visible: {line} after {stale_line}")
+                break
         matching = [
             item
             for item in telemetry
@@ -700,6 +740,12 @@ def verify_rotation_hysteresis(lines: list[str]) -> list[str]:
             origin = line_field(line, "origin")
             if origin and origin not in ACTIVE_SOCKET_ORIGINS:
                 failures.append(f"proxy_rotation trigger from non-active origin: {line}")
+            role = line_field(line, "role")
+            if role and role != "control_main":
+                failures.append(f"proxy_rotation trigger from non-control role: {line}")
+        if "proxy_rotation" in line and "rotation_suppressed_by_lifecycle_origin" in line:
+            if "owner=" not in line or "role=" not in line:
+                failures.append(f"rotation_suppressed_by_lifecycle_origin missing owner/role: {line}")
         if "proxy_rotation decision=trigger_terminal_exact" in line:
             phase = line_field(line, "phase")
             if phase not in TERMINAL_ONE_SHOT_PHASES:

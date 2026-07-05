@@ -136,6 +136,21 @@ jobs:
       - name: Check plugin client_utils compatibility guard
         run: python3 Tools/check_plugin_client_utils_contract.py
 
+      - name: Check plugin android_utils compatibility guard
+        run: python3 Tools/check_plugin_android_utils_contract.py
+
+      - name: Check plugin text formatting compatibility guard
+        run: python3 Tools/check_plugin_text_formatting_contract.py
+
+      - name: Check plugin structured settings guard
+        run: python3 Tools/check_plugin_structured_settings.py
+
+      - name: Check plugin exteraGram UI bridge guard
+        run: python3 Tools/check_plugin_exteragram_ui_bridge.py
+
+      - name: Check plugin Java package shim guard
+        run: python3 Tools/check_plugin_java_package_shims.py
+
       - name: Check plugin Python dependency guard
         run: python3 Tools/check_plugin_python_deps.py
 

@@ -24,6 +24,7 @@ import android.text.StaticLayout;
 import android.text.TextUtils;
 import android.text.style.CharacterStyle;
 import android.text.style.URLSpan;
+import android.view.inputmethod.EditorInfo;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -45,6 +46,7 @@ import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatMessageSharedResources;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.ContactsController;
+import org.telegram.messenger.EditableForwardDraft;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.MessagePreviewParams;
 import org.telegram.messenger.LocaleController;
@@ -54,6 +56,7 @@ import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.Utilities;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.ActionBarMenuSubItem;
 import org.telegram.ui.ActionBar.ActionBarPopupWindow;
 import org.telegram.ui.ActionBar.Theme;
@@ -690,10 +693,18 @@ public class MessagePreviewView extends FrameLayout {
             chatListView.setOnItemClickListener(new RecyclerListView.OnItemClickListener() {
                 @Override
                 public void onItemClick(View view, int position) {
-                    if (currentTab != TAB_FORWARD || messages.previewMessages.size() <= 1) {
+                    if (currentTab != TAB_FORWARD) {
                         return;
                     }
-                    int id = messages.previewMessages.get(position).getId();
+                    MessageObject messageObject = messages.previewMessages.get(position);
+                    if (messagePreviewParams.isEditableForwardingEnabled()) {
+                        showEditableForwardCaptionEditor(messageObject);
+                        return;
+                    }
+                    if (messages.previewMessages.size() <= 1) {
+                        return;
+                    }
+                    int id = messageObject.getId();
                     boolean newSelected = !messages.selectedIds.get(id, false);
                     if (messages.selectedIds.size() == 1 && !newSelected) {
                         return;
@@ -1027,6 +1038,29 @@ public class MessagePreviewView extends FrameLayout {
                     captionButton = null;
                 }
 
+                ActionBarMenuSubItem editableForwardModeView = new ActionBarMenuSubItem(context, true, false, false, resourcesProvider);
+                editableForwardModeView.setTextAndIcon(LocaleController.getString(R.string.EditableForwardMode), R.drawable.msg_edit);
+                menu.addView(editableForwardModeView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48));
+
+                ActionBarMenuSubItem editableForwardGroupingView = new ActionBarMenuSubItem(context, true, false, false, resourcesProvider);
+                menu.addView(editableForwardGroupingView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48));
+
+                Runnable updateEditableForwardRows = () -> {
+                    boolean editable = messagePreviewParams.isEditableForwardingEnabled();
+                    editableForwardModeView.setChecked(editable);
+                    editableForwardGroupingView.setEnabled(editable);
+                    editableForwardGroupingView.setAlpha(editable ? 1f : 0.45f);
+                    boolean separatePosts = editable
+                        && messagePreviewParams.editableForwardDraft != null
+                        && messagePreviewParams.editableForwardDraft.getGroupingMode() == EditableForwardDraft.GroupingMode.SEPARATE_POSTS;
+                    editableForwardGroupingView.setChecked(separatePosts);
+                    editableForwardGroupingView.setTextAndIcon(
+                        LocaleController.getString(separatePosts ? R.string.EditableForwardSeparatePosts : R.string.EditableForwardAlbum),
+                        separatePosts ? R.drawable.msg_ungroup : R.drawable.msg_media_gallery
+                    );
+                };
+                updateEditableForwardRows.run();
+
                 ActionBarMenuSubItem changeRecipientView = new ActionBarMenuSubItem(context, true, false, resourcesProvider);
                 changeRecipientView.setOnClickListener(view -> selectAnotherChat(true));
                 changeRecipientView.setTextAndIcon(LocaleController.getString(R.string.ChangeRecipient), R.drawable.msg_forward_replace);
@@ -1060,6 +1094,37 @@ public class MessagePreviewView extends FrameLayout {
                         }
                     }
                     sendersNameButton.setState(messagePreviewParams.hideForwardSendersName, true);
+                    updateMessages();
+                    updateSubtitle(true);
+                });
+
+                editableForwardModeView.setOnClickListener(view -> {
+                    if (messagePreviewParams.isEditableForwardingEnabled()) {
+                        messagePreviewParams.disableEditableForwarding();
+                    } else {
+                        messagePreviewParams.enableEditableForwarding(messagePreviewParams.hideCaption);
+                    }
+                    messages = messagePreviewParams.forwardMessages;
+                    sendersNameButton.setState(messagePreviewParams.hideForwardSendersName, true);
+                    updateEditableForwardRows.run();
+                    updateMessages();
+                    updateSubtitle(true);
+                });
+
+                editableForwardGroupingView.setOnClickListener(view -> {
+                    if (!messagePreviewParams.isEditableForwardingEnabled()) {
+                        if (!messagePreviewParams.enableEditableForwarding(messagePreviewParams.hideCaption)) {
+                            return;
+                        }
+                    }
+                    if (messagePreviewParams.editableForwardDraft != null && messagePreviewParams.editableForwardDraft.getGroupingMode() == EditableForwardDraft.GroupingMode.ALBUM) {
+                        setGroupingMode(EditableForwardDraft.GroupingMode.SEPARATE_POSTS);
+                    } else {
+                        setGroupingMode(EditableForwardDraft.GroupingMode.ALBUM);
+                    }
+                    messages = messagePreviewParams.forwardMessages;
+                    sendersNameButton.setState(messagePreviewParams.hideForwardSendersName, true);
+                    updateEditableForwardRows.run();
                     updateMessages();
                     updateSubtitle(true);
                 });
@@ -1293,16 +1358,77 @@ public class MessagePreviewView extends FrameLayout {
         }
 
         boolean updateAfterAnimations;
+
+        private void setGroupingMode(EditableForwardDraft.GroupingMode mode) {
+            messagePreviewParams.setEditableForwardGroupingMode(mode);
+        }
+
+        private void showEditableForwardCaptionEditor(MessageObject messageObject) {
+            if (messageObject == null || !messagePreviewParams.isEditableForwardingEnabled() || messagePreviewParams.editableForwardDraft == null) {
+                return;
+            }
+            EditableForwardDraft.Item item = messagePreviewParams.editableForwardDraft.findItem(messageObject.getId());
+            if (item == null) {
+                return;
+            }
+            Context context = getContext();
+            if (!item.supported) {
+                new AlertDialog.Builder(context, resourcesProvider)
+                    .setTitle(LocaleController.getString(R.string.EditableForwardEditCaption))
+                    .setMessage(LocaleController.getString(R.string.EditableForwardUnsupported))
+                    .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                    .show();
+                return;
+            }
+            FrameLayout container = new FrameLayout(context);
+            EditTextBoldCursor editText = new EditTextBoldCursor(context);
+            editText.setText(item.caption == null ? "" : item.caption);
+            editText.setSelection(editText.length());
+            editText.setHint(LocaleController.getString(R.string.EditableForwardCaptionHint));
+            editText.setTextColor(getThemedColor(Theme.key_dialogTextBlack));
+            editText.setHintTextColor(getThemedColor(Theme.key_dialogTextHint));
+            editText.setSingleLine(false);
+            editText.setMinLines(3);
+            editText.setMaxLines(6);
+            editText.setImeOptions(EditorInfo.IME_ACTION_DONE);
+            container.addView(editText, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.TOP, 24, 8, 24, 8));
+
+            AlertDialog dialog = new AlertDialog.Builder(context, resourcesProvider)
+                .setTitle(LocaleController.getString(R.string.EditableForwardEditCaption))
+                .setView(container)
+                .setPositiveButton(LocaleController.getString(R.string.ApplyChanges), (alertDialog, which) -> {
+                    messagePreviewParams.editEditableForwardCaption(messageObject.getId(), editText.getText().toString(), null);
+                    messages = messagePreviewParams.forwardMessages;
+                    updateMessages();
+                    updateSubtitle(true);
+                })
+                .setNegativeButton(LocaleController.getString(R.string.Cancel), null)
+                .create();
+            dialog.setOnShowListener(dialogInterface -> {
+                editText.requestFocus();
+                AndroidUtilities.showKeyboard(editText);
+            });
+            dialog.show();
+        }
+
         private void updateMessages() {
             if (itemAnimator.isRunning()) {
                 updateAfterAnimations = true;
                 return;
             }
+            boolean editableForward = currentTab == TAB_FORWARD && messagePreviewParams.isEditableForwardingEnabled();
+            if (editableForward) {
+                messagePreviewParams.rebuildForwardPreviewFromDraft();
+                messages = messagePreviewParams.forwardMessages;
+            }
             for (int i = 0; i < messages.previewMessages.size(); i++) {
                 MessageObject messageObject = messages.previewMessages.get(i);
                 messageObject.forceUpdate = true;
                 messageObject.sendAsPeer = sendAsPeer;
-                if (!messagePreviewParams.hideForwardSendersName) {
+                if (editableForward) {
+                    messageObject.messageOwner.flags &= ~TLRPC.MESSAGE_FLAG_FWD;
+                    messageObject.hideSendersName = true;
+                } else if (!messagePreviewParams.hideForwardSendersName) {
                     messageObject.messageOwner.flags |= TLRPC.MESSAGE_FLAG_FWD;
                     messageObject.hideSendersName = false;
                 } else {
@@ -1330,7 +1456,9 @@ public class MessagePreviewView extends FrameLayout {
                         messageObject.messageOwner.media = null;
                     }
                 }
-                if (messagePreviewParams.hideCaption) {
+                if (editableForward) {
+                    messageObject.generateCaption();
+                } else if (messagePreviewParams.hideCaption) {
                     messageObject.caption = null;
                 } else {
                     messageObject.generateCaption();

@@ -295,6 +295,10 @@ public class ProxyCheckDiagnostics {
         if (proxyInfo == null) {
             return title("ProxyWindowStatusNoProxy", R.string.ProxyWindowStatusNoProxy);
         }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (ProxyRuntimeStateStore.shouldShowResumeRestoringStatus(proxyInfo, now)) {
+            return title("ProxyStatusRestoringProxy", R.string.ProxyStatusRestoringProxy);
+        }
         if (hasFreshFailure(proxyInfo)) {
             return diagnosticTitle(proxyInfo.lastCheckDiagnostic);
         }
@@ -376,7 +380,11 @@ public class ProxyCheckDiagnostics {
         if (proxyInfo == null) {
             return LocaleController.getString(R.string.ProxyStatusUnknownFail);
         }
+        long now = android.os.SystemClock.elapsedRealtime();
         if (currentProxyEnabled) {
+            if (ProxyRuntimeStateStore.shouldShowResumeRestoringStatus(proxyInfo, now)) {
+                return LocaleController.getString(R.string.ProxyStatusRestoringProxy);
+            }
             if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
@@ -389,6 +397,9 @@ public class ProxyCheckDiagnostics {
             }
             if (hasFreshLivePhase(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+            }
+            if (ProxyRuntimeStateStore.isResumeGrace(now)) {
+                return LocaleController.getString(R.string.ProxyStatusRestoringProxy);
             }
             if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
                 return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
@@ -426,6 +437,10 @@ public class ProxyCheckDiagnostics {
         if (proxyInfo == null) {
             return LocaleController.getString(R.string.ProxyWindowStatusNoProxy);
         }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (ProxyRuntimeStateStore.shouldShowResumeRestoringStatus(proxyInfo, now)) {
+            return LocaleController.getString(R.string.ProxyStatusRestoringProxy);
+        }
         if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
@@ -438,6 +453,9 @@ public class ProxyCheckDiagnostics {
         }
         if (hasFreshLivePhase(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
+        if (ProxyRuntimeStateStore.isResumeGrace(now)) {
+            return LocaleController.getString(R.string.ProxyStatusRestoringProxy);
         }
         if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
             return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
@@ -594,6 +612,9 @@ public class ProxyCheckDiagnostics {
 
     public static int statusColorKey(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
         if (currentProxyEnabled) {
+            if (ProxyRuntimeStateStore.shouldShowResumeRestoringStatus(proxyInfo, android.os.SystemClock.elapsedRealtime())) {
+                return Theme.key_windowBackgroundWhiteGrayText2;
+            }
             if (hasFreshFailure(proxyInfo)) {
                 return Theme.key_text_RedRegular;
             }
@@ -621,6 +642,46 @@ public class ProxyCheckDiagnostics {
             return Theme.key_windowBackgroundWhiteGreenText;
         }
         return Theme.key_windowBackgroundWhiteGrayText2;
+    }
+
+    public static boolean isProxyShieldConnected(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
+        return currentProxyEnabled && currentConnectionIsUsableForStatus(proxyInfo, currentConnectionState);
+    }
+
+    public static int proxyShieldAlertLevel(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
+        if (!currentProxyEnabled || proxyInfo == null) {
+            return 0;
+        }
+        if (ProxyRuntimeStateStore.shouldShowResumeRestoringStatus(proxyInfo, android.os.SystemClock.elapsedRealtime())) {
+            return 0;
+        }
+        if (hasFreshFailure(proxyInfo)) {
+            return isDegradedAfterRecentSuccess(proxyInfo, proxyInfo.lastCheckDiagnostic) ? 1 : 2;
+        }
+        return 0;
+    }
+
+    public static int proxyShieldAlertColorKey(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
+        int level = proxyShieldAlertLevel(proxyInfo, currentProxyEnabled, currentConnectionState);
+        if (level >= 2) {
+            return Theme.key_text_RedRegular;
+        }
+        if (level == 1) {
+            return Theme.key_avatar_backgroundOrange;
+        }
+        return Theme.key_windowBackgroundWhiteBlueText6;
+    }
+
+    private static boolean isDegradedAfterRecentSuccess(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
+        String failureClass = ProxyPhasePolicy.failureClassForPhase(diagnostic);
+        if (ProxyEndpointVerdict.FAILURE_CLASS_POST_SUCCESS_DATA_PATH_DEGRADED.equals(failureClass)) {
+            return true;
+        }
+        if (!ProxyEndpointVerdict.FAILURE_CLASS_MTPROXY_NO_RESPONSE_AFTER_SEND.equals(failureClass)) {
+            return false;
+        }
+        long lastSuccessAgeMs = ProxyRuntimeStateStore.lastUsableSuccessAgeMs(proxyInfo);
+        return lastSuccessAgeMs >= 0 && lastSuccessAgeMs < FAILURE_PHASE_STALE_MS;
     }
 
     public static String diagnosticText(String diagnostic) {

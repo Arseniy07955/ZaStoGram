@@ -4100,14 +4100,24 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
 void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options, uint32_t activationGeneration, std::string activationOrigin) {
     MtProxyOptions normalizedOptions = normalizeMtProxyOptions(options);
     scheduleTask([&, address, port, username, password, secret, normalizedOptions, activationGeneration, activationOrigin] {
+        std::string safeActivationOrigin = activationOrigin.empty() ? "active_socket" : activationOrigin;
         if (activationGeneration != 0) {
             proxyActivationGeneration = activationGeneration;
-            proxyActivationOrigin = activationOrigin.empty() ? "active_socket" : activationOrigin;
+            proxyActivationOrigin = safeActivationOrigin;
         }
         std::string newSecret = decodeSecret(secret);
         bool secretChanged = proxySecret != newSecret;
         bool optionsChanged = proxyMtProxyOptions != normalizedOptions;
         bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged || optionsChanged;
+        bool configGenerationOwner = safeActivationOrigin == "settings_change"
+                || safeActivationOrigin == "user_select";
+        if (reconnect || configGenerationOwner || proxyConfigGeneration == 0) {
+            uint32_t nextConfigGeneration = activationGeneration != 0 ? activationGeneration : proxyConfigGeneration + 1;
+            if (nextConfigGeneration == 0) {
+                nextConfigGeneration = 1;
+            }
+            proxyConfigGeneration = nextConfigGeneration;
+        }
         proxyAddress = address;
         proxyPort = port;
         proxyUser = username;
@@ -4149,6 +4159,10 @@ void ConnectionsManager::setProxyActivationContext(uint32_t activationGeneration
 
 uint32_t ConnectionsManager::getProxyActivationGeneration() {
     return proxyActivationGeneration;
+}
+
+uint32_t ConnectionsManager::getProxyConfigGeneration() {
+    return proxyConfigGeneration;
 }
 
 std::string ConnectionsManager::getProxyActivationOrigin() {

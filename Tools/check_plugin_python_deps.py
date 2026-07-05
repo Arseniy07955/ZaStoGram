@@ -12,7 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_GRADLE = ROOT / "TMessagesProj" / "build.gradle"
 
 REQUIRED_PACKAGES = {
+    "beautifulsoup4": "common HTML parsing library listed by exteraGram",
+    "debugpy": "debug adapter listed by exteraGram for plugin development",
+    "lxml": "common XML/HTML parser listed by exteraGram",
+    "packaging": "version parsing dependency used by common plugin libraries",
     "Pillow": "provides PIL for image-processing plugins",
+    "PyYAML": "YAML parser listed by exteraGram",
     "pyfiglet": "used by ASCII art generator plugins",
     "requests": "used by networked plugin helpers",
 }

@@ -548,9 +548,11 @@ def main():
     )
     require(
         "context.fakeTls" in failure_body
-        and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure_body
+        and "MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(phase, context.responseSignature)" in failure_body
+        and "bool budgetEligible = context.fakeTls" in failure_body
+        and "bool recipeAdvanceAllowed = !silentAfterClientHello" in failure_body
         and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure_body,
-        "recipe level must only advance for FakeTLS connections with cursor-advancing recovery actions, never for dd/legacy MTProxy",
+        "FakeTLS budget counting must be separate from recipe advancement, and cursor movement must stay gated by cursor-advancing recovery actions",
     )
     success_start = endpoint_recorder.find("void MtProxyEndpointRecorder::recordDataPathSuccess")
     success_end = len(endpoint_recorder)

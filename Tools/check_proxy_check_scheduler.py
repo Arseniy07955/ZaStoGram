@@ -38,7 +38,6 @@ checks = [
     (SCHEDULER, "markConnected", "scheduler must expose a single path for real connected-state observations"),
     (SCHEDULER, "markConnectionStarting", "scheduler must expose a single path for explicit current-proxy reconnect attempts"),
     (SCHEDULER, "markConnectionUsable", "scheduler must expose a concrete native-success path that clears stale endpoint backoff"),
-    (SCHEDULER, "markEndpointFailure", "scheduler must expose a single path for real current-connection endpoint failures"),
     (STORE, "nextAllowedCheckTime", "runtime store facade must expose a single debounce policy for UI and rotation"),
     (SCHEDULER, "isEndpointBackedOff", "scheduler must expose endpoint backoff state so rotation cannot bypass it"),
     (STORE, "rememberProxyCheckResult", "runtime store must update endpoint cooldowns from measured check results"),
@@ -93,7 +92,7 @@ checks = [
     (ROTATION, "engine.hasScheduledAttempt", "proxy rotation must not schedule duplicate delayed sweeps"),
     (ROTATION, "TERMINAL_STAGE_SWITCH_DELAY_MS", "proxy rotation must accelerate fallback after terminal MTProxy startup phases"),
     (ROTATION, "NotificationCenter.proxyConnectionStageChanged", "proxy rotation must observe concrete MTProxy startup stages"),
-    (ROTATION, "ProxyRuntimeStateStore.shouldScheduleFallback", "proxy rotation must use the runtime store to decide terminal phases"),
+    (ROTATION, "rotationTrigger", "proxy rotation must use reducer-confirmed rotation triggers to decide terminal phases"),
     (JAVA_MANAGER, "ProxyRuntimeStateStore.onNativeStage(event)", "current proxy live terminal stages must update runtime endpoint backoff"),
     (ROTATION, "proxy_rotation ", "proxy rotation must emit stable diagnostics"),
     (ROTATION, "scheduled_check skipped background_disabled", "proxy rotation must not launch a full proxy-check sweep while connection is already trying"),
@@ -189,7 +188,7 @@ visible_mark_starting_start = visible_text.find("static boolean markConnectionSt
 visible_mark_starting_end = visible_text.find("static boolean markConnectionUsable", visible_mark_starting_start)
 visible_mark_starting_body = visible_text[visible_mark_starting_start:visible_mark_starting_end]
 held_live_idx = visible_mark_starting_body.find("decision=held_live_by_usable_success")
-routine_visible_idx = visible_mark_starting_body.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now);", held_live_idx)
+routine_visible_idx = visible_mark_starting_body.find("ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin);", held_live_idx)
 clear_usable_idx = visible_mark_starting_body.find("ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName)")
 if (
     "ProxyConnectionEvent.connectStart" not in mark_starting_body
@@ -435,11 +434,11 @@ if (
     print("Proxy check scheduler guard failed:")
     print(f" - {HEALTH.relative_to(ROOT)}: rotation-visible endpoint backoff must use nextAllowedCheckTime, current elapsed time, and failure count without treating connected grace as failure backoff")
     sys.exit(1)
-mark_failure_method = store_text[store_text.find("public static ProxyHealthStore.EndpointFailureResult markEndpointFailure"):]
-mark_failure_method = mark_failure_method[:mark_failure_method.find("\n    public static void markEndpointCooldown", 1)]
+live_failure_method = reducer_text[reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"):]
+live_failure_method = live_failure_method[:live_failure_method.find("\n    private static boolean isActiveProxyEvent", 1)]
 if (
-    "ProxyPhasePolicy.canBackoff(diagnostic)" not in mark_failure_method
-    or "ProxyHealthStore.rememberLiveFailure(proxyInfo, normalized, now)" not in mark_failure_method
+    "verdict.canBackoff" not in live_failure_method
+    or "ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp" not in live_failure_method
     or "rememberEndpointFailure" not in health_text
     or "PROXY_CHECK_LIVE_FAILURE_DEDUP_MS" not in health_text
     or "state.lastDiagnostic" not in health_text

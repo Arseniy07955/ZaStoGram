@@ -21,6 +21,8 @@ public class ProxyDrawable extends Drawable {
     private final Drawable fullDrawable;
 
     private final Paint outerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint alertPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint alertBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF circleRect = new RectF();
     private int radOffset = 0;
     private long lastUpdateTime;
@@ -29,6 +31,8 @@ public class ProxyDrawable extends Drawable {
 
     private boolean connected;
     private boolean isEnabled;
+    private int alertLevel;
+    private int alertColor = 0xffff9800;
 
     public ProxyDrawable(Context context) {
         super();
@@ -38,12 +42,21 @@ public class ProxyDrawable extends Drawable {
         outerPaint.setStyle(Paint.Style.STROKE);
         outerPaint.setStrokeWidth(AndroidUtilities.dp(1.66f));
         outerPaint.setStrokeCap(Paint.Cap.ROUND);
+        alertBorderPaint.setStyle(Paint.Style.STROKE);
+        alertBorderPaint.setStrokeWidth(AndroidUtilities.dp(1.5f));
+        alertBorderPaint.setColor(0xffffffff);
         lastUpdateTime = SystemClock.elapsedRealtime();
     }
 
     public void setConnected(boolean enabled, boolean value, boolean animated) {
+        setStatus(enabled, value, 0, alertColor, animated);
+    }
+
+    public void setStatus(boolean enabled, boolean value, int alertLevel, int alertColor, boolean animated) {
         isEnabled = enabled;
         connected = value;
+        this.alertLevel = Math.max(0, alertLevel);
+        this.alertColor = alertColor;
         lastUpdateTime = SystemClock.elapsedRealtime();
         if (!animated) {
             connectedAnimationProgress = connected ? 1.0f : 0.0f;
@@ -96,6 +109,16 @@ public class ProxyDrawable extends Drawable {
                 connectedAnimationProgress = 0.0f;
             }
             invalidateSelf();
+        }
+
+        if (isEnabled && alertLevel > 0) {
+            Rect bounds = getBounds();
+            float radius = AndroidUtilities.dp(alertLevel >= 2 ? 4.0f : 3.5f);
+            float cx = bounds.centerX() + AndroidUtilities.dp(7);
+            float cy = bounds.centerY() + AndroidUtilities.dp(7);
+            alertPaint.setColor(alertColor);
+            canvas.drawCircle(cx, cy, radius + AndroidUtilities.dp(1), alertBorderPaint);
+            canvas.drawCircle(cx, cy, radius, alertPaint);
         }
     }
 

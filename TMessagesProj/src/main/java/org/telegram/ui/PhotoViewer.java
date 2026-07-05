@@ -2192,6 +2192,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private final static int gallery_menu_chromecast = 24;
     private final static int gallery_menu_create_sticker = 25;
     private final static int gallery_menu_delete2 = 26;
+    private final static int gallery_menu_save_current_frame = 27;
 
     private final static int ads_sponsor_info = 101;
     private final static int ads_about = 102;
@@ -5326,6 +5327,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                         }
                         dialog.setTextColor(getThemedColor(Theme.key_voipgroup_actionBarItems));
                     }
+                } else if (id == gallery_menu_save_current_frame) {
+                    saveCurrentFrameToGallery();
                 } else if (id == gallery_menu_chromecast) {
                     ChromecastController.getInstance().setCurrentMediaAndCastIfNeeded(getCurrentChromecastMedia());
                     castItemButton.performClick();
@@ -6118,6 +6121,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         });
         galleryGap = menuItem.addColoredGap();
         galleryGap.setColor(0xff181818);
+        menuItem.addSubItem(gallery_menu_save_current_frame, R.drawable.msg_gallery, getString(R.string.SaveCurrentFrame)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.addSubItem(gallery_menu_openin, R.drawable.msg_openin, getString(R.string.OpenInExternalApp)).setColors(0xfffafafa, 0xfffafafa);
         pipItem = menuItem.addSubItem(gallery_menu_pip, R.drawable.menu_video_pip, getString(R.string.PipMinimize)).setColors(0xfffafafa, 0xfffafafa);
         allMediaItem = menuItem.addSubItem(gallery_menu_showall, R.drawable.msg_media, getString(R.string.ShowAllMedia));
@@ -6136,6 +6140,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         menuItem.addSubItem(gallery_menu_delete, R.drawable.msg_delete, getString(R.string.Delete)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.addSubItem(gallery_menu_cancel_loading, R.drawable.msg_cancel, getString(R.string.StopDownload)).setColors(0xfffafafa, 0xfffafafa);
         menuItem.redrawPopup(0xf9222222);
+        menuItem.hideSubItem(gallery_menu_save_current_frame);
         menuItem.hideSubItem(gallery_menu_translate);
         menuItem.hideSubItem(gallery_menu_hide_translation);
         setMenuItemIcon(false, true);
@@ -8940,6 +8945,47 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     public float getCurrentVideoSpeed() {
         return currentVideoSpeed;
+    }
+
+    private void saveCurrentFrameToGallery() {
+        if (parentActivity == null || containerView == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23 && (Build.VERSION.SDK_INT <= 28 || BuildVars.NO_SCOPED_STORAGE) && parentActivity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            parentActivity.requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 4);
+            return;
+        }
+        Bitmap bitmap = getCurrentVideoFrameBitmap();
+        if (bitmap == null) {
+            BulletinFactory.of(containerView, resourcesProvider).createSimpleBulletin(R.raw.error, getString(R.string.UnknownError)).show();
+            return;
+        }
+        MediaController.saveBitmapToGallery(bitmap, parentActivity, uri -> {
+            if (uri != null) {
+                BulletinFactory.createSaveToGalleryBulletin(containerView, false, 0xf9222222, 0xffffffff).show();
+            } else {
+                BulletinFactory.of(containerView, resourcesProvider).createSimpleBulletin(R.raw.error, getString(R.string.UnknownError)).show();
+            }
+        });
+    }
+
+    private Bitmap getCurrentVideoFrameBitmap() {
+        try {
+            if (videoTextureView != null && videoTextureView.isAvailable() && videoTextureView.getWidth() > 0 && videoTextureView.getHeight() > 0) {
+                Bitmap bitmap = videoTextureView.getBitmap();
+                if (bitmap != null && !bitmap.isRecycled()) {
+                    return bitmap;
+                }
+            }
+            if (usedSurfaceView && videoSurfaceView != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && videoSurfaceView.getWidth() > 0 && videoSurfaceView.getHeight() > 0 && videoSurfaceView.getHolder().getSurface().isValid()) {
+                Bitmap bitmap = Bitmaps.createBitmap(videoSurfaceView.getWidth(), videoSurfaceView.getHeight(), Bitmap.Config.ARGB_8888);
+                AndroidUtilities.getBitmapFromSurface(videoSurfaceView, bitmap);
+                return bitmap;
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+        return null;
     }
 
     private boolean checkInlinePermissions() {
@@ -14199,6 +14245,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         menuItem.hideSubItem(gallery_menu_report);
         menuItem.hideSubItem(gallery_menu_share);
         menuItem.hideSubItem(gallery_menu_openin);
+        menuItem.hideSubItem(gallery_menu_save_current_frame);
         menuItem.hideSubItem(gallery_menu_savegif);
         menuItem.hideSubItem(gallery_menu_masks2);
         menuItem.hideSubItem(gallery_menu_edit_avatar);
@@ -15917,12 +15964,14 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 speedItem.setVisibility(View.VISIBLE);
                 videoItem.setVisibility(View.VISIBLE);
                 menuItem.showSubItem(gallery_menu_speed);
+                menuItem.setSubItemShown(gallery_menu_save_current_frame, !isEmbedVideo && allowShare);
                 menuItem.setSubItemShown(gallery_menu_create_sticker, false);
                 speedGap.setVisibility(menuItem.getVisibleSubItemsCount() > 1 ? View.VISIBLE : View.GONE);
             } else {
                 speedItem.setVisibility(View.GONE);
                 videoItem.setVisibility(View.GONE);
                 speedGap.setVisibility(View.GONE);
+                menuItem.setSubItemShown(gallery_menu_save_current_frame, false);
                 menuItem.setSubItemShown(gallery_menu_create_sticker, !noforwards && currentMessageObject != null && currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto());
                 menuItem.checkHideMenuItem();
             }

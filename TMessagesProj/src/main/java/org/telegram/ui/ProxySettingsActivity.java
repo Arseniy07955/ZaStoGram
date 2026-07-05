@@ -49,6 +49,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.ProxyConnectionEvent;
 import org.telegram.messenger.ProxyCheckScheduler;
+import org.telegram.messenger.ProxyLinkHelper;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
 import org.telegram.messenger.SvgHelper;
@@ -70,16 +71,14 @@ import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.QRCodeBottomSheet;
 import org.telegram.ui.Components.SectionsScrollView;
 
-import java.io.UnsupportedEncodingException;
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 
 public class ProxySettingsActivity extends BaseFragment {
 
-    private final static int TYPE_SOCKS5 = 0;
-    private final static int TYPE_MTPROTO = 1;
-    public final static int TYPE_WSS = 2;
+    private final static int TYPE_SOCKS5 = ProxyLinkHelper.TYPE_SOCKS5;
+    private final static int TYPE_MTPROTO = ProxyLinkHelper.TYPE_MTPROTO;
+    public final static int TYPE_WSS = ProxyLinkHelper.TYPE_WSS;
 
     private final static int FIELD_IP = 0;
     private final static int FIELD_PORT = 1;
@@ -107,7 +106,7 @@ public class ProxySettingsActivity extends BaseFragment {
 
     private int pasteType = -1;
     private String pasteString;
-    private String[] pasteFields;
+    private ProxyLinkHelper.ProxyLink pasteProxyLink;
 
     private float shareDoneProgress = 1f;
     private float[] shareDoneProgressAnimValues = new float[2];
@@ -126,16 +125,6 @@ public class ProxySettingsActivity extends BaseFragment {
     private boolean ignoreQuickProxyLinkChange;
 
     private static final int done_button = 1;
-
-    private static final class ParsedProxyLink {
-        final int type;
-        final String[] fields;
-
-        ParsedProxyLink(int type, String[] fields) {
-            this.type = type;
-            this.fields = fields;
-        }
-    }
 
     public static class TypeCell extends FrameLayout {
 
@@ -434,7 +423,7 @@ public class ProxySettingsActivity extends BaseFragment {
                 if (ignoreQuickProxyLinkChange) {
                     return;
                 }
-                ParsedProxyLink parsedProxyLink = parseProxyLink(s.toString());
+                ProxyLinkHelper.ProxyLink parsedProxyLink = parseProxyLink(s.toString());
                 if (parsedProxyLink != null) {
                     applyParsedProxyLink(parsedProxyLink, true);
                 }
@@ -615,7 +604,7 @@ public class ProxySettingsActivity extends BaseFragment {
         pasteCell.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText4));
         pasteCell.setOnClickListener(v -> {
             if (pasteType != -1) {
-                applyParsedProxyLink(new ParsedProxyLink(pasteType, pasteFields), true);
+                applyParsedProxyLink(pasteProxyLink, true);
             }
         });
         linearLayout2.addView(pasteCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
@@ -710,110 +699,45 @@ public class ProxySettingsActivity extends BaseFragment {
         return fragmentView;
     }
 
-    private ParsedProxyLink parseProxyLink(String text) {
-        if (TextUtils.isEmpty(text)) {
-            return null;
-        }
-        String[] params = null;
-        int type = -1;
-
-        final String[] socksStrings = {"t.me/socks?", "tg://socks?"};
-        for (int i = 0; i < socksStrings.length; i++) {
-            final int index = text.indexOf(socksStrings[i]);
-            if (index >= 0) {
-                type = TYPE_SOCKS5;
-                params = text.substring(index + socksStrings[i].length()).split("&");
-                break;
-            }
-        }
-
-        if (params == null) {
-            final String[] proxyStrings = {"t.me/proxy?", "tg://proxy?"};
-            for (int i = 0; i < proxyStrings.length; i++) {
-                final int index = text.indexOf(proxyStrings[i]);
-                if (index >= 0) {
-                    type = TYPE_MTPROTO;
-                    params = text.substring(index + proxyStrings[i].length()).split("&");
-                    break;
-                }
-            }
-        }
-
-        if (params == null) {
-            final String[] wssStrings = {"zastogram://wss?", "tg://wss?"};
-            for (int i = 0; i < wssStrings.length; i++) {
-                final int index = text.indexOf(wssStrings[i]);
-                if (index >= 0) {
-                    type = TYPE_WSS;
-                    params = text.substring(index + wssStrings[i].length()).split("&");
-                    break;
-                }
-            }
-        }
-
-        if (params == null) {
-            return null;
-        }
-
-        String[] fields = new String[inputFields.length];
-        for (int i = 0; i < params.length; i++) {
-            final String[] pair = params[i].split("=", 2);
-            if (pair.length != 2) continue;
-            String value;
-            try {
-                value = URLDecoder.decode(pair[1], "UTF-8");
-            } catch (UnsupportedEncodingException e) {
-                value = pair[1];
-            }
-            switch (pair[0].toLowerCase()) {
-                case "server":
-                    if (type == TYPE_WSS) {
-                        fields[FIELD_WSS_HOST] = value;
-                    } else {
-                        fields[FIELD_IP] = value;
-                    }
-                    break;
-                case "port":
-                    fields[FIELD_PORT] = value;
-                    break;
-                case "user":
-                    if (type == TYPE_SOCKS5) {
-                        fields[FIELD_USER] = value;
-                    }
-                    break;
-                case "pass":
-                    if (type == TYPE_SOCKS5) {
-                        fields[FIELD_PASSWORD] = value;
-                    }
-                    break;
-                case "secret":
-                    if (type == TYPE_MTPROTO) {
-                        fields[FIELD_SECRET] = value;
-                    }
-                    break;
-                case "path":
-                    if (type == TYPE_WSS) {
-                        fields[FIELD_WSS_PATH] = value;
-                    }
-                    break;
-            }
-        }
-
-        return new ParsedProxyLink(type, fields);
+    private ProxyLinkHelper.ProxyLink parseProxyLink(String text) {
+        return ProxyLinkHelper.parse(text);
     }
 
-    private void applyParsedProxyLink(ParsedProxyLink parsedProxyLink, boolean animated) {
+    private void applyParsedProxyLink(ProxyLinkHelper.ProxyLink parsedProxyLink, boolean animated) {
         if (parsedProxyLink == null || proxyTypeLocked && parsedProxyLink.type != initialType) {
             return;
         }
         setProxyType(parsedProxyLink.type, animated, () -> AndroidUtilities.hideKeyboard(inputFieldsContainer.findFocus()));
-        for (int i = 0; i < parsedProxyLink.fields.length; i++) {
-            inputFields[i].setText(parsedProxyLink.fields[i]);
+        for (int i = 0; i < inputFields.length; i++) {
+            inputFields[i].setText(proxyLinkField(parsedProxyLink, i));
         }
         int focusField = parsedProxyLink.type == TYPE_WSS ? FIELD_WSS_HOST : FIELD_IP;
         inputFields[focusField].setSelection(inputFields[focusField].length());
         AndroidUtilities.hideKeyboard(inputFieldsContainer.findFocus());
         checkShareDone(animated);
+    }
+
+    private String proxyLinkField(ProxyLinkHelper.ProxyLink proxyLink, int field) {
+        if (proxyLink == null) {
+            return "";
+        }
+        switch (field) {
+            case FIELD_IP:
+                return proxyLink.type == TYPE_WSS ? "" : proxyLink.address;
+            case FIELD_PORT:
+                return String.valueOf(proxyLink.port);
+            case FIELD_USER:
+                return proxyLink.type == TYPE_SOCKS5 ? proxyLink.username : "";
+            case FIELD_PASSWORD:
+                return proxyLink.type == TYPE_SOCKS5 ? proxyLink.password : "";
+            case FIELD_SECRET:
+                return proxyLink.type == TYPE_MTPROTO ? proxyLink.secret : "";
+            case FIELD_WSS_HOST:
+                return proxyLink.type == TYPE_WSS ? proxyLink.address : "";
+            case FIELD_WSS_PATH:
+                return proxyLink.type == TYPE_WSS ? proxyLink.wssPath : "";
+        }
+        return "";
     }
 
     private void updatePasteCell() {
@@ -836,11 +760,11 @@ public class ProxySettingsActivity extends BaseFragment {
 
         pasteType = -1;
         pasteString = clipText;
-        pasteFields = new String[inputFields.length];
-        ParsedProxyLink parsedProxyLink = parseProxyLink(clipText);
+        pasteProxyLink = null;
+        ProxyLinkHelper.ProxyLink parsedProxyLink = parseProxyLink(clipText);
         if (parsedProxyLink != null) {
             pasteType = parsedProxyLink.type;
-            pasteFields = parsedProxyLink.fields;
+            pasteProxyLink = parsedProxyLink;
         }
 
         if (proxyTypeLocked && pasteType != initialType) {

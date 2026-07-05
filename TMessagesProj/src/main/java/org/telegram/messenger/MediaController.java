@@ -5730,6 +5730,68 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         saveFile(fullPath, context, type, name, mime, onSaved, true);
     }
 
+    public static void saveBitmapToGallery(Bitmap bitmap, Context context, final Utilities.Callback<Uri> onSaved) {
+        if (bitmap == null || bitmap.isRecycled() || context == null) {
+            if (onSaved != null) {
+                AndroidUtilities.runOnUIThread(() -> onSaved.run(null));
+            }
+            return;
+        }
+
+        new Thread(() -> {
+            Uri savedUri = null;
+            try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    final String filename = AndroidUtilities.generateFileName(0, "jpg");
+                    final ContentValues cv = new ContentValues();
+                    final Uri uriToInsert = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+                    final File dirDest = new File(Environment.DIRECTORY_PICTURES, "Telegram");
+                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH, dirDest + File.separator);
+                    cv.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
+                    cv.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+                    cv.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
+                    final Uri dst = ApplicationLoader.applicationContext.getContentResolver().insert(uriToInsert, cv);
+                    if (dst != null) {
+                        boolean ok = false;
+                        try (OutputStream os = ApplicationLoader.applicationContext.getContentResolver().openOutputStream(dst)) {
+                            ok = os != null && bitmap.compress(Bitmap.CompressFormat.JPEG, 95, os);
+                        }
+                        if (ok) {
+                            savedUri = dst;
+                        } else {
+                            try {
+                                ApplicationLoader.applicationContext.getContentResolver().delete(dst, null, null);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                } else {
+                    final File destDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Telegram");
+                    destDir.mkdirs();
+                    File destFile = new File(destDir, AndroidUtilities.generateFileName(0, "jpg"));
+                    if (!destFile.exists()) {
+                        destFile.createNewFile();
+                    }
+                    boolean ok;
+                    try (FileOutputStream fos = new FileOutputStream(destFile)) {
+                        ok = bitmap.compress(Bitmap.CompressFormat.JPEG, 95, fos);
+                    }
+                    if (ok) {
+                        AndroidUtilities.addMediaToGallery(destFile.getAbsoluteFile());
+                        savedUri = Uri.fromFile(destFile);
+                    } else {
+                        destFile.delete();
+                    }
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            if (onSaved != null) {
+                final Uri finalUri = savedUri;
+                AndroidUtilities.runOnUIThread(() -> onSaved.run(finalUri));
+            }
+        }).start();
+    }
+
     public static void saveFile(String fullPath, Context context, final int type, final String name, final String mime, final Utilities.Callback<Uri> onSaved, boolean showProgress) {
         if (fullPath == null || context == null) {
             return;

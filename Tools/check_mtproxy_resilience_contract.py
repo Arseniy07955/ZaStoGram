@@ -224,9 +224,11 @@ def main() -> None:
     )
     require(
         "context.fakeTls" in failure
-        and "MtProxyProbeCoordinator::failureNeedsRecipe(phase)" in failure
+        and "MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(phase, context.responseSignature)" in failure
+        and "bool budgetEligible = context.fakeTls" in failure
+        and "bool recipeAdvanceAllowed = !silentAfterClientHello" in failure
         and "mtProxyRecoveryActionAdvancesRecipe(recoveryAction)" in failure,
-        "recipe level must advance only for FakeTLS connections with recovery-action cursor movement",
+        "FakeTLS budget counting must be separate from recipe advancement, and cursor movement must stay gated by recovery-action cursor movement",
     )
     require(
         "result.clientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF" in adaptive_policy
@@ -269,7 +271,7 @@ def main() -> None:
     require(
         "ProxyConnectionEvent.nativeStage" in stage_bridge
         and "ProxyRuntimeStateStore.onNativeStage(event)" in stage_bridge
-        and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, visiblePhase, event.timestamp, event.activationGeneration)" in visible_store
+        and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, event, visiblePhase)" in visible_store
         and "static void mirrorVisiblePhase" in status_mirror
         and "postNotificationName(NotificationCenter.proxyConnectionStageChanged" in stage_bridge,
         "native live stages must update the current proxy and notify the proxy UI immediately",

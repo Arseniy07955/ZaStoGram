@@ -151,6 +151,7 @@ import org.telegram.messenger.ContactsController;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.DocumentObject;
 import org.telegram.messenger.DownloadController;
+import org.telegram.messenger.EditableForwardDraft;
 import org.telegram.messenger.Emoji;
 import org.telegram.messenger.EmojiData;
 import org.telegram.messenger.FactCheckController;
@@ -14228,7 +14229,7 @@ public class ChatActivity extends BaseFragment implements
         getConnectionsManager().bindRequestToGuid(linkSearchRequestId, classGuid);
     }
 
-    private void forwardMessages(ArrayList<MessageObject> arrayList, boolean fromMyName, boolean hideCaption, boolean notify, int scheduleDate, long payStars) {
+    private void forwardMessages(ArrayList<MessageObject> arrayList, EditableForwardDraft editableForwardDraft, boolean fromMyName, boolean hideCaption, boolean notify, int scheduleDate, long payStars) {
         if (arrayList == null || arrayList.isEmpty()) {
             return;
         }
@@ -14241,7 +14242,12 @@ public class ChatActivity extends BaseFragment implements
                 chatAdapter.checkRemoveBotForumRowsStartThreadRow(true);
             }
         }
-        int result = getSendMessagesHelper().sendMessage(arrayList, dialog_id, fromMyName, hideCaption, notify, scheduleDate, 0, getThreadMessage(), -1, payStars, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+        int result;
+        if (editableForwardDraft != null && editableForwardDraft.isEnabled()) {
+            result = getSendMessagesHelper().sendEditableForwardDraft(editableForwardDraft, dialog_id, notify, scheduleDate, 0, getThreadMessage(), payStars, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+        } else {
+            result = getSendMessagesHelper().sendMessage(arrayList, dialog_id, fromMyName, hideCaption, notify, scheduleDate, 0, getThreadMessage(), -1, payStars, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+        }
         AlertsCreator.showSendMediaAlert(result, this, themeDelegate);
         if (result != 0) {
             AndroidUtilities.runOnUIThread(() -> {
@@ -15326,7 +15332,7 @@ public class ChatActivity extends BaseFragment implements
                     if (messagePreviewParams.forwardMessages != null) {
                         messagePreviewParams.forwardMessages.getSelectedMessages(messagesToForward);
                     }
-                    forwardMessages(messagesToForward, messagePreviewParams.hideForwardSendersName, messagePreviewParams.hideCaption, notify, scheduleDate != 0 && scheduleDate != 0x7ffffffe ? scheduleDate + 1 : scheduleDate, payStars);
+                    forwardMessages(messagesToForward, messagePreviewParams.getEditableForwardDraftForSend(), messagePreviewParams.hideForwardSendersName, messagePreviewParams.hideCaption, notify, scheduleDate != 0 && scheduleDate != 0x7ffffffe ? scheduleDate + 1 : scheduleDate, payStars);
 //                }
             }
             if (forwardingPreviewView == null) {

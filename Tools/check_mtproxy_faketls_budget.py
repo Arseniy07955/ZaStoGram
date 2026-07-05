@@ -60,6 +60,16 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def block(text: str, start_marker: str, end_marker: str | None = None) -> str:
+    start = text.find(start_marker)
+    if start < 0:
+        return ""
+    if end_marker is None:
+        return text[start:]
+    end = text.find(end_marker, start + len(start_marker))
+    return text[start:end if end >= 0 else len(text)]
+
+
 def run_verifier(markers: str) -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as handle:
         handle.write(markers.strip() + "\n")
@@ -204,6 +214,9 @@ def main() -> int:
     coordinator_h = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.h")
     coordinator_cpp = read(TGNET.parent / "mtproxy/MtProxyProbeCoordinator.cpp")
     socket_cpp = read(TGNET / "ConnectionSocket.cpp")
+    socket_h = read(TGNET / "ConnectionSocket.h")
+    manager_h = read(TGNET / "ConnectionsManager.h")
+    manager_cpp = read(TGNET / "ConnectionsManager.cpp")
     endpoint_recorder_cpp = read(TGNET.parent / "mtproxy/MtProxyEndpointRecorder.cpp")
     connection_cpp = read(TGNET / "Connection.cpp")
     phase_contract_h = read(TGNET.parent / "mtproxy/MtProxyPhaseContract.h")
@@ -217,7 +230,7 @@ def main() -> int:
 
     require("HandshakeBudgetBackoff" in coordinator_h, "coordinator must expose HandshakeBudgetBackoff decision", failures)
     require("FakeTlsHandshakeBudget" in coordinator_cpp, "coordinator must own FakeTlsHandshakeBudget state", failures)
-    require("uint32_t activationGeneration" in coordinator_h and "activationGeneration" in coordinator_cpp, "ProbeKey must carry activationGeneration", failures)
+    require("uint32_t configGeneration" in coordinator_h and "configGeneration" in coordinator_cpp, "ProbeKey must carry configGeneration for FakeTLS budget state", failures)
     require("responseSignature" in coordinator_h and "responseSignature" in coordinator_cpp, "completeFailure must accept and report responseSignature", failures)
     require("terminalBudgetExhausted" in coordinator_h and "terminalPhase" in coordinator_h, "FailureResult must expose terminal budget verdict fields", failures)
     require("MT_PROXY_FAKETLS_BUDGET_HOLD_MS" in coordinator_cpp and "30 * 1000" in coordinator_cpp, "terminal budget hold must be 30 seconds", failures)
@@ -232,6 +245,41 @@ def main() -> int:
         failures,
     )
     require("mtProxyFailureResponseSignature" in socket_cpp, "ConnectionSocket must compute stable response signatures for post-ClientHello bytes", failures)
+    recorder_failure = block(endpoint_recorder_cpp, "void MtProxyEndpointRecorder::recordFailure", "void MtProxyEndpointRecorder::recordHandshakeOk")
+    require(
+        "bool budgetEligible = context.fakeTls" in recorder_failure
+        and "MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(phase, context.responseSignature)" in recorder_failure
+        and "bool recipeAdvanceAllowed = !silentAfterClientHello" in recorder_failure
+        and "MtProxyProbeCoordinator::completeFailure(" in recorder_failure
+        and recorder_failure.find("MtProxyProbeCoordinator::completeFailure(") > recorder_failure.find("if (budgetEligible)"),
+        "NoBytesAfterClientHello/silent FakeTLS failures must enter coordinator budget accounting before recipe advancement is considered",
+        failures,
+    )
+    require(
+        "proxyConfigGeneration" in manager_h
+        and "getProxyConfigGeneration" in manager_h
+        and "proxyConfigGeneration" in manager_cpp
+        and "proxyConfigGeneration" in socket_h
+        and "proxyConfigGeneration = manager.getProxyConfigGeneration()" in socket_cpp
+        and "probeKey.configGeneration = proxyConfigGeneration" in socket_cpp,
+        "native FakeTLS probe budget must use proxyConfigGeneration rather than lifecycle activationGeneration",
+        failures,
+    )
+    set_proxy_settings_body = block(manager_cpp, "void ConnectionsManager::setProxySettings", "void ConnectionsManager::setProxyActivationContext")
+    require(
+        'safeActivationOrigin == "settings_change"' in set_proxy_settings_body
+        and 'safeActivationOrigin == "user_select"' in set_proxy_settings_body
+        and 'safeActivationOrigin == "rotation_candidate"' not in set_proxy_settings_body
+        and "if (reconnect || configGenerationOwner || proxyConfigGeneration == 0)" in set_proxy_settings_body,
+        "proxyConfigGeneration must change only for USER_SELECT/SETTINGS_CHANGE, first capture, or an actual proxy config reconnect; rotation_candidate must rely on reconnect rather than origin alone",
+        failures,
+    )
+    activation_context_body = block(manager_cpp, "void ConnectionsManager::setProxyActivationContext", "uint32_t ConnectionsManager::getProxyActivationGeneration")
+    require(
+        "proxyConfigGeneration" not in activation_context_body,
+        "setProxyActivationContext must not reset FakeTLS configGeneration on foreground/background lifecycle churn",
+        failures,
+    )
     require("ProxyStatusFaketlsHandshakeFailedShort" in values and "MTProxy/FakeTLS handshake failed" in values, "English strings must define the short FakeTLS terminal user-facing text", failures)
     require("ProxyStatusFaketlsHandshakeFailedShort" in values_ru and "Сервер доступен по TCP, но MTProxy/FakeTLS рукопожатие не прошло." in values_ru, "Russian strings must define the short FakeTLS terminal user-facing text", failures)
     require("isFakeTlsTerminalHandshakeFailure" in diagnostics and "ProxyStatusFaketlsHandshakeFailedShort" in diagnostics, "terminal FakeTLS failures must use a short shared title/list text while keeping detailed diagnosticText resources", failures)

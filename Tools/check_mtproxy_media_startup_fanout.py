@@ -152,6 +152,7 @@ def run_runtime_log_checks(failures: list[str]) -> None:
 def main():
     failures = []
     runtime = read(MESSENGER / "ProxyRuntimeStateStore.java")
+    reducer = read(MESSENGER / "ProxyEventReducer.java")
     health = read(MESSENGER / "ProxyHealthStore.java")
     warmup = read(MESSENGER / "ProxyWarmupGate.java")
     loader = read(MESSENGER / "FileLoader.java")
@@ -166,7 +167,7 @@ def main():
     stories_delay = method_body(stories, "private boolean delayProxyWarmupPrefetch")
     mark_usable = method_body(runtime, "public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration)")
     apply_usable = method_body(runtime, "static boolean applyConnectionUsable")
-    mark_failure = method_body(runtime, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
+    mark_failure = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
 
     require(
         "lastUsableSuccessTime" in health

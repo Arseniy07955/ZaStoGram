@@ -1045,6 +1045,7 @@ public class ConnectionsManager extends BaseController {
                 getContactsController().checkContacts();
             }
             lastPauseTime = 0;
+            ProxyRuntimeStateStore.noteResumeForeground();
             publishProxyActivationContext(ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
             native_resumeNetwork(currentAccount, false);
         }
@@ -1122,23 +1123,36 @@ public class ConnectionsManager extends BaseController {
     // UI-thread-confined (every write happens inside the runOnUIThread lambda below): last logged
     // proxy_connection_stage per account, used to log only on an actual stage transition.
     private static final java.util.HashMap<Integer, String> lastLoggedProxyStage = new java.util.HashMap<>();
+    private static final java.util.HashMap<Integer, String> lastLoggedProxyDiagnosis = new java.util.HashMap<>();
 
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin) {
         onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, 0);
     }
 
     public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration) {
-        onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, 0);
+        onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, "", activationGeneration, 0);
+    }
+
+    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration) {
+        onProxyConnectionStageChanged(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, 0);
     }
 
     // Native callback (TgNetWrapper): suggestedHoldMs is the native retry
     // authority's clock (endpoint cooldown / probe coordinator hold) riding
     // along with the event, so the Java layer never re-derives hold windows.
-    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration, final int suggestedHoldMs) {
+    public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs) {
         AndroidUtilities.runOnUIThread(() -> {
-            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
+            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, suggestedHoldMs, android.os.SystemClock.elapsedRealtime());
             ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event);
             String normalizedDiagnostic = event.phase;
+            if (BuildVars.LOGS_ENABLED && decision != null) {
+                long lastSuccessAgeMs = ProxyRuntimeStateStore.lastUsableSuccessAgeMs(SharedConfig.currentProxy, event.timestamp);
+                String diagnosisKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration + "|" + decision.decision + "|" + decision.visibleChanged + "|" + decision.rotationTrigger;
+                if (!diagnosisKey.equals(lastLoggedProxyDiagnosis.get(currentAccount))) {
+                    lastLoggedProxyDiagnosis.put(currentAccount, diagnosisKey);
+                    FileLog.d("proxy_diagnosis owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " layer=" + decision.verdict.layer + " failure_class=" + decision.verdict.failureClass + " action=" + decision.verdict.action + " decision=" + decision.decision + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration + " last_success_age_ms=" + lastSuccessAgeMs + " visible_changed=" + (decision.visibleChanged ? 1 : 0) + " rotation_trigger=" + (decision.rotationTrigger ? 1 : 0) + " shadowed=" + (decision.shadowed ? 1 : 0));
+                }
+            }
             if (!shouldNotifyProxyConnectionStage(decision)) {
                 return;
             }
@@ -1146,14 +1160,14 @@ public class ConnectionsManager extends BaseController {
                 // The native side fires this callback on every transport state change (thousands/sec
                 // during a reconnect storm); logging each one was the bulk of the main-log spam. Only
                 // distinct transitions carry diagnostic value, so log on change of (phase, endpoint, probe).
-                String stageKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.probeKey + "|" + event.activationGeneration;
+                String stageKey = normalizedDiagnostic + "|" + endpointKey + "|" + event.origin.wireName + "|" + event.socketRole.wireName + "|" + event.probeKey + "|" + event.activationGeneration;
                 if (!stageKey.equals(lastLoggedProxyStage.get(currentAccount))) {
                     lastLoggedProxyStage.put(currentAccount, stageKey);
-                    FileLog.d("proxy_connection_stage account=" + currentAccount + " origin=" + event.origin.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration);
+                    FileLog.d("proxy_connection_stage owner=ConnectionsManager.onProxyConnectionStageChanged account=" + currentAccount + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + normalizedDiagnostic + " endpoint=" + endpointKey + " probe=" + event.probeKey + " activation_generation=" + event.activationGeneration);
                 }
             }
-            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration);
-            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration);
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
+            AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0);
         });
     }
 

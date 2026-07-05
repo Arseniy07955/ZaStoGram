@@ -27,7 +27,7 @@ MtProxyProbeCoordinator::ProbeKey probeKeyFor(const MtProxyEndpointRecorder::Com
     probeKey.endpointKey = context.endpointKey;
     probeKey.networkEndpointKey = context.networkEndpointKey;
     probeKey.allowedSniVariants = context.allowedSniVariants;
-    probeKey.activationGeneration = context.activationGeneration;
+    probeKey.configGeneration = context.configGeneration;
     return probeKey;
 }
 
@@ -100,14 +100,14 @@ void MtProxyEndpointRecorder::recordFailure(const FailureContext &context, const
     MtProxyDataPathFailureAction dataPathFailureAction = mtProxyDataPathFailureActionForPhase(phase, evidenceKind);
     bool silentAfterClientHello = context.responseBytes == 0
             && evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello;
-    bool recipeFailure = context.fakeTls
-            && !silentAfterClientHello
-            && MtProxyProbeCoordinator::failureNeedsRecipe(phase)
+    bool budgetEligible = context.fakeTls
+            && MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(phase, context.responseSignature);
+    bool recipeAdvanceAllowed = !silentAfterClientHello
             && mtProxyRecoveryActionAdvancesRecipe(recoveryAction);
     if (silentAfterClientHello) {
-        debug(callbacks, "connection(", context.socketTag, ") mtproxy_startup silent_after_client_hello phase=", phase, " endpoint=", context.endpointKey, " recipe_held");
+        debug(callbacks, "connection(", context.socketTag, ") mtproxy_startup silent_after_client_hello phase=", phase, " endpoint=", context.endpointKey, " recipe_held budget_eligible=", budgetEligible ? 1 : 0);
     }
-    if (recipeFailure) {
+    if (budgetEligible) {
         MtProxyProbeCoordinator::FailureResult failure = MtProxyProbeCoordinator::completeFailure(
                 probeKeyFor(context),
                 context.ownerToken,
@@ -116,6 +116,7 @@ void MtProxyEndpointRecorder::recordFailure(const FailureContext &context, const
                 context.recipeUsesGrease,
                 context.recipeIsGreaseProbe,
                 context.classicFallbackAllowed,
+                recipeAdvanceAllowed,
                 context.now);
         if (!failure.recorded) {
             return;

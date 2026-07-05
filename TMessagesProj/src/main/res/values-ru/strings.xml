@@ -10,6 +10,7 @@
     <string name="LanguageCode">ru</string>
     <string name="ContinueOnThisLanguage">Продолжить на русском</string>
     <string name="SaveCleanRoundVideo">Сохранить кружочек без подписи</string>
+    <string name="SaveCurrentFrame">Сохранить текущий кадр</string>
     <string name="RoundVideosAsRegularMedia">Открывать кружочки как видео</string>
     <string name="RoundVideosAsRegularMediaInfo">Показывает видеосообщения обычными квадратными медиа внутри чата.</string>
     <!--signin view-->
@@ -331,8 +332,9 @@
     <string name="ProxyStatusFaketlsServerClosedTerminal">TCP открыт, но сервер закрыл соединение после FakeTLS ClientHello. Вероятно, сервер отвергает профиль/SNI/секрет или соединение закрывается фильтром.</string>
     <string name="ProxyStatusBackgroundHandshakeAborted">Рукопожатие остановилось в фоне</string>
     <string name="ProxyStatusHandshakeProfilesExhausted">Профили MTProxy handshake исчерпаны; повторяем с задержкой</string>
-    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy-пакет отправлен, ответа сервера нет</string>
-    <string name="ProxyStatusPostHandshakeNoAppData">Рукопожатие прошло, MTProto-данные не пришли</string>
+    <string name="ProxyStatusRestoringProxy">Восстанавливаем соединение через прокси...</string>
+    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy-пакет отправлен, ответа сервера нет. Прокси доступен на TCP, но data-path не отвечает.</string>
+    <string name="ProxyStatusPostHandshakeNoAppData">MTProxy-пакет отправлен, ответа сервера нет. Прокси доступен на TCP, но data-path не отвечает.</string>
     <string name="ProxyStatusDroppedEarlyAfterAppData">Подключился и быстро отвалился после первых данных</string>
     <string name="ProxyStatusDroppedAfterAppData">Подключился и отвалился после первых данных</string>
     <string name="ProxyStatusCancelled">Проверка отменена</string>
@@ -418,4 +420,10 @@
     <string name="ZaLogsFooter">Новый файл лога создаётся при каждом открытии приложения, чтобы разные сессии не путались. Старые файлы сверх лимита удаляются автоматически.</string>
     <string name="ZaLogsKeep">Хранить последние файлы</string>
     <string name="ZaLogsKeepUnlimited">Без ограничения</string>
+    <string name="EditableForwardMode">Редактируемая пересылка</string>
+    <string name="EditableForwardAlbum">Отправить альбомом</string>
+    <string name="EditableForwardSeparatePosts">Отправить отдельными постами</string>
+    <string name="EditableForwardEditCaption">Изменить подпись</string>
+    <string name="EditableForwardCaptionHint">Подпись</string>
+    <string name="EditableForwardUnsupported">Это сообщение нельзя отправить редактируемой копией</string>
 </resources>

@@ -97,7 +97,7 @@ def verify_runtime_contract(failures: list[str]) -> None:
     )
     require(
         bad_proxy_check_overwrite.returncode != 0
-        and "non-active origin mirrored as active visible status" in bad_proxy_check_overwrite.stderr,
+        and "non-visible origin mirrored as active visible status" in bad_proxy_check_overwrite.stderr,
         "runtime verifier must reject proxy-check/candidate visible overwrite after fresh usable success",
         failures,
     )
@@ -109,7 +109,7 @@ def verify_runtime_contract(failures: list[str]) -> None:
     )
     require(
         bad_same_endpoint_proxy_check_success.returncode != 0
-        and "non-active origin mirrored as active visible status" in bad_same_endpoint_proxy_check_success.stderr,
+        and "non-visible origin mirrored as active visible status" in bad_same_endpoint_proxy_check_success.stderr,
         "runtime verifier must reject same-endpoint proxy_check usable success as global visible success",
         failures,
     )
@@ -227,8 +227,8 @@ def main() -> int:
     phase_contract = read(TOOLS / "mtproxy_phase_contract.py")
 
     require("enum Origin" in event and "ACTIVE_SOCKET" in event and "PROXY_CHECK" in event and "PROXY_LIST_ROW" in event, "ProxyConnectionEvent must carry explicit origin values", failures)
-    require("origin" in wrapper and "probeKey" in wrapper and "activationGeneration" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper and "suggestedReconnectHoldMs" in wrapper, "JNI proxy stage callback must carry origin, probe key, activation generation and the native hold", failures)
-    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines, "native delegate must expose proxy stage origin, probe key, activation generation and the native hold", failures)
+    require("origin" in wrapper and "socketRole" in wrapper and "probeKey" in wrapper and "activationGeneration" in wrapper and "onProxyConnectionStageChanged" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper and "suggestedReconnectHoldMs" in wrapper, "JNI proxy stage callback must carry origin, role, probe key, activation generation and the native hold", failures)
+    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, std::string socketRole, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines, "native delegate must expose proxy stage origin, role, probe key, activation generation and the native hold", failures)
     require(
         "public static Decision onRuntimeEvent(ProxyConnectionEvent event)" in runtime
         and "return ProxyEventReducer.reduce(event)" in runtime
@@ -239,8 +239,10 @@ def main() -> int:
     require(
         "if (!isActiveProxyEvent(event))" in reducer
         and "updateProxyRowOnly" in reducer
-        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in runtime + reducer,
-        "ProxyEventReducer must route non-active proxy origins to row-only handling before active visible/backoff policy",
+        and "ProxyConnectionEvent.isHealthOrigin(event.origin)" in reducer
+        and "ProxyConnectionEvent.canDriveVisible(event)" in reducer
+        and "decision=lifecycle_health_only" in reducer,
+        "ProxyEventReducer must split row-only origins from health-only lifecycle events before visible/backoff policy",
         failures,
     )
     require(
@@ -251,14 +253,16 @@ def main() -> int:
     )
     require(
         "event.origin.wireName" in java_connections
-        and "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in java_connections,
-        "ConnectionsManager must propagate proxy event origin through proxyConnectionStageChanged notifications",
+        and "event.socketRole.wireName" in java_connections
+        and "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0)" in java_connections,
+        "ConnectionsManager must propagate proxy event origin/generation/role/reducer-decision through proxyConnectionStageChanged notifications",
         failures,
     )
     require(
-        "ignore_non_active_origin" in rotation
-        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in rotation,
-        "ProxyRotationController must ignore proxyConnectionStageChanged events whose origin is not an active-socket cause",
+        "rotation_suppressed_by_lifecycle_origin" in rotation
+        and "ProxyConnectionEvent.canDriveVisible(event)" in rotation
+        and "ProxyConnectionEvent.canDriveRotation(event, verdict)" in rotation,
+        "ProxyRotationController must ignore proxyConnectionStageChanged events whose origin/role cannot own rotation",
         failures,
     )
 

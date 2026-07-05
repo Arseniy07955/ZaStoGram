@@ -1892,6 +1892,102 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         }
     }
 
+    public int sendEditableForwardDraft(
+            EditableForwardDraft editableForwardDraft,
+            long peer,
+            boolean notify,
+            int scheduleDate,
+            int scheduleRepeatPeriod,
+            MessageObject replyToTopMsg,
+            long payStars,
+            long monoForumPeerId,
+            MessageSuggestionParams suggestionParams
+    ) {
+        if (editableForwardDraft == null || !editableForwardDraft.isEnabled()) {
+            return 0;
+        }
+        ArrayList<EditableForwardDraft.Item> items = editableForwardDraft.getSelectedItems();
+        if (items.isEmpty()) {
+            return 0;
+        }
+        for (int i = 0; i < items.size(); i++) {
+            EditableForwardDraft.Item item = items.get(i);
+            if (item == null || !item.supported || !EditableForwardDraft.canCopy(item.source)) {
+                return 2;
+            }
+        }
+        long currentPayStars = getMessagesController().getSendPaidMessagesStars(peer);
+        if (currentPayStars <= 0) {
+            currentPayStars = DialogObject.getMessagesStarsPrice(getMessagesController().isUserContactBlocked(peer));
+        }
+        if (currentPayStars != payStars) {
+            AlertsCreator.ensurePaidMessageConfirmation(currentAccount, peer, Math.max(1, items.size()), newPayStars -> {
+                sendEditableForwardDraft(editableForwardDraft, peer, notify, scheduleDate, scheduleRepeatPeriod, replyToTopMsg, newPayStars, monoForumPeerId, suggestionParams);
+            });
+            return 0;
+        }
+
+        boolean album = editableForwardDraft.getGroupingMode() == EditableForwardDraft.GroupingMode.ALBUM && items.size() > 1;
+        int lastGroupableIndex = -1;
+        if (album) {
+            for (int i = 0; i < items.size(); i++) {
+                if (isEditableForwardGroupable(items.get(i))) {
+                    lastGroupableIndex = i;
+                }
+            }
+        }
+
+        long groupId = 0;
+        int groupCount = 0;
+        for (int i = 0; i < items.size(); i++) {
+            EditableForwardDraft.Item item = items.get(i);
+            MessageObject source = item.source;
+            TLRPC.Message owner = source.messageOwner;
+            TLRPC.MessageMedia media = owner.media;
+            HashMap<String, String> params = null;
+            boolean groupable = album && isEditableForwardGroupable(item);
+            if (groupable) {
+                if (groupCount == 0 || groupCount == 10) {
+                    groupId = Utilities.random.nextLong();
+                    groupCount = 0;
+                }
+                groupCount++;
+                params = new HashMap<>();
+                params.put("groupId", "" + groupId);
+                if (groupCount == 10 || i == lastGroupableIndex) {
+                    params.put("final", "1");
+                    groupCount = 0;
+                }
+            }
+
+            SendMessageParams sendMessageParams;
+            if (media == null || media instanceof TLRPC.TL_messageMediaEmpty || media instanceof TLRPC.TL_messageMediaWebPage) {
+                TLRPC.WebPage webPage = media instanceof TLRPC.TL_messageMediaWebPage ? media.webpage : null;
+                sendMessageParams = SendMessageParams.of(item.caption, peer, null, replyToTopMsg, webPage, true, item.entities, null, params, notify, scheduleDate, scheduleRepeatPeriod, null, false);
+            } else if (media.photo instanceof TLRPC.TL_photo) {
+                sendMessageParams = SendMessageParams.of((TLRPC.TL_photo) media.photo, owner.attachPath, peer, null, replyToTopMsg, item.caption, item.entities, null, params, notify, scheduleDate, scheduleRepeatPeriod, media.ttl_seconds, source, false, source.hasMediaSpoilers());
+            } else if (media.document instanceof TLRPC.TL_document) {
+                sendMessageParams = SendMessageParams.of((TLRPC.TL_document) media.document, null, owner.attachPath, peer, null, replyToTopMsg, item.caption, item.entities, null, params, notify, scheduleDate, scheduleRepeatPeriod, media.ttl_seconds, source, null, false, source.hasMediaSpoilers());
+            } else {
+                return 2;
+            }
+            sendMessageParams.payStars = payStars;
+            sendMessageParams.monoForumPeer = monoForumPeerId;
+            sendMessageParams.suggestionParams = suggestionParams;
+            sendMessageParams.invert_media = owner.invert_media;
+            sendMessage(sendMessageParams);
+        }
+        return 0;
+    }
+
+    private boolean isEditableForwardGroupable(EditableForwardDraft.Item item) {
+        if (item == null || item.source == null || item.source.messageOwner == null || item.source.messageOwner.media == null) {
+            return false;
+        }
+        TLRPC.MessageMedia media = item.source.messageOwner.media;
+        return media.photo instanceof TLRPC.TL_photo || media.document instanceof TLRPC.TL_document;
+    }
+
     public void sendScreenshotMessage(TLRPC.User user, int messageId, TLRPC.Message resendMessage) {
         if (user == null || messageId == 0 || user.id == getUserConfig().getClientUserId()) {
             return;

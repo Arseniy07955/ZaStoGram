@@ -14,6 +14,20 @@ final class ProxyEventReducer {
         SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
         String normalizedPhase = ProxyCheckDiagnostics.normalize(event.phase);
         ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForEvent(event);
+        boolean visibleOwner = ProxyConnectionEvent.canDriveVisible(event);
+        boolean rotationOwner = ProxyConnectionEvent.canDriveRotation(event, verdict);
+        boolean lifecycleHealthOnly = ProxyConnectionEvent.isLifecycleHealthOnly(event);
+        boolean concretePhase = verdict.isLivePhase()
+                || (verdict.isFailure() && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedPhase));
+        if (concretePhase && ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
+            ProxyVisibleStateStore.clearPendingDnsVisiblePhase(event.endpointKey, event.timestamp);
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=ignored_stale_generation source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " activation_generation=" + event.activationGeneration);
+            ProxyEndpointVerdict staleVerdict = verdict.withClassification(
+                    ProxyEndpointVerdict.LAYER_LIFECYCLE_CANCELLED,
+                    ProxyEndpointVerdict.FAILURE_CLASS_STALE_GENERATION_CANCELLED,
+                    ProxyPhasePolicy.userTextKeyForFailureClass(ProxyEndpointVerdict.FAILURE_CLASS_STALE_GENERATION_CANCELLED, event.phase));
+            return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_generation", event.phase, event.endpointKey, staleVerdict);
+        }
         if (ProxyConnectionEvent.SOURCE_CONNECTED.equals(event.source)) {
             return reduceConnected(currentProxy, event, verdict);
         }
@@ -27,6 +41,13 @@ final class ProxyEventReducer {
             if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
                 return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_generation", event.phase, event.endpointKey, verdict);
             }
+            if (lifecycleHealthOnly
+                    && currentProxy != null
+                    && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
+                ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+                ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=lifecycle_health_only source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + normalizedPhase + " endpoint=" + event.endpointKey + " visible_owner=0 rotation_owner=0");
+                return ProxyRuntimeStateStore.Decision.ignored("lifecycle_health_only", normalizedPhase, event.endpointKey, verdict);
+            }
             if (isActiveProxyEvent(event)
                     && currentProxy != null
                     && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
@@ -37,22 +58,11 @@ final class ProxyEventReducer {
             }
             return ProxyRuntimeStateStore.Decision.ignored("shadowed_socket_failure", normalizedPhase, event.endpointKey, verdict);
         }
-        boolean concretePhase = verdict.isLivePhase()
-                || (verdict.isFailure() && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedPhase));
         boolean selectedAccountStage = event.account == UserConfig.selectedAccount;
         boolean terminalExactConfig = verdict.terminalExactConfig;
         String failureClass = verdict.failureClass;
         if (!isActiveProxyEvent(event)) {
             return updateProxyRowOnly(currentProxy, event, terminalExactConfig);
-        }
-        if (concretePhase && ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
-            ProxyVisibleStateStore.clearPendingDnsVisiblePhase(event.endpointKey, event.timestamp);
-            ProxyRuntimeStateStore.logControl("decision=ignored_stale_generation source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " activation_generation=" + event.activationGeneration);
-            ProxyEndpointVerdict staleVerdict = verdict.withClassification(
-                    ProxyEndpointVerdict.LAYER_LIFECYCLE_CANCELLED,
-                    ProxyEndpointVerdict.FAILURE_CLASS_STALE_GENERATION_CANCELLED,
-                    ProxyPhasePolicy.userTextKeyForFailureClass(ProxyEndpointVerdict.FAILURE_CLASS_STALE_GENERATION_CANCELLED, event.phase));
-            return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_generation", event.phase, event.endpointKey, staleVerdict);
         }
         if (concretePhase && ProxyHealthStore.shouldIgnoreEndpointTelemetry(event.endpointKey, event.timestamp)) {
             ProxyVisibleStateStore.clearPendingDnsVisiblePhase(event.endpointKey, event.timestamp);
@@ -69,6 +79,31 @@ final class ProxyEventReducer {
                 ProxyRuntimeStateStore.logControl("decision=ignored_stale_endpoint source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " current=" + ProxyEndpointKey.liveStage(currentProxy));
             }
             return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        if (lifecycleHealthOnly) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            if (verdict.isLivePhase()) {
+                ProxyWarmupGate.onProxyLivePhase(event.endpointKey, verdict.phase, event.timestamp);
+            }
+            String lifecycleDecision = ProxyRuntimeStateStore.isResumeGrace(event.timestamp) && !verdict.usableSuccess
+                    ? "resume_grace_health_only"
+                    : lifecycleDecisionFor(event, verdict);
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=" + lifecycleDecision + " source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=0 rotation_owner=0");
+            if (verdict.canRotate) {
+                ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=rotation_suppressed_by_lifecycle_origin origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + event.phase + " endpoint=" + event.endpointKey);
+            }
+            return new ProxyRuntimeStateStore.Decision(lifecycleDecision, event.phase, event.endpointKey, verdict, false, false, false);
+        }
+        if (shouldKeepVisibleOwnerInResumeGraceTelemetryOnly(event, verdict)) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            if (verdict.isLivePhase()) {
+                ProxyWarmupGate.onProxyLivePhase(event.endpointKey, verdict.phase, event.timestamp);
+            }
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=resume_grace_health_only source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=1 rotation_owner=0");
+            if (verdict.canRotate) {
+                ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=rotation_suppressed_by_resume_grace origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + event.phase + " endpoint=" + event.endpointKey);
+            }
+            return new ProxyRuntimeStateStore.Decision("resume_grace_health_only", event.phase, event.endpointKey, verdict, false, false, false);
         }
         if (!ProxyVisibleStateStore.shouldDelayDnsVisiblePhase(event.phase)) {
             ProxyVisibleStateStore.clearPendingDnsVisiblePhase(event.endpointKey, event.timestamp);
@@ -122,7 +157,7 @@ final class ProxyEventReducer {
         }
 
         if (ProxyVisibleStateStore.shouldDelayDnsVisiblePhase(event.phase)) {
-            if (selectedAccountStage) {
+            if (selectedAccountStage && visibleOwner) {
                 ProxyVisibleStateStore.scheduleDnsVisiblePhase(currentProxy, event);
             }
             ProxyRuntimeStateStore.logControl("decision=telemetry_only source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " delay_ms=" + ProxyVisibleStateStore.DNS_VISIBLE_DELAY_MS);
@@ -135,7 +170,7 @@ final class ProxyEventReducer {
         }
 
         boolean visibleChanged = false;
-        if (selectedAccountStage && verdict.canOverwriteVisible) {
+        if (selectedAccountStage && visibleOwner && verdict.canOverwriteVisible) {
             if (ProxyVisibleStateStore.shouldHoldVisiblePhaseByFreshFailure(currentProxy, event)) {
                 return new ProxyRuntimeStateStore.Decision("held_by_fresh_failure", event.phase, event.endpointKey, verdict, false, false, true);
             }
@@ -159,9 +194,12 @@ final class ProxyEventReducer {
         }
         ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs);
         ProxyRuntimeStateStore.logControl("decision=backoff phase=" + verdict.phase + " layer=" + verdict.layer + " failure_class=" + verdict.failureClass + " confidence=" + verdict.confidence + " action=" + verdict.action + " sticky_until_ms=" + verdict.stickyUntilMs + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " failures=" + failure.consecutiveFailures + " rotation_failures=" + failure.rotationFailures + " rotation_allowed=" + failure.rotationAllowed);
-        if (verdict.canRotate && failure.rotationAllowed) {
+        if (rotationOwner && verdict.canRotate && failure.rotationAllowed) {
             ProxyRuntimeStateStore.logControl("decision=rotation_trigger phase=" + verdict.phase + " failures=" + failure.rotationFailures + " failure_class=" + failureClass + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey + " probe=" + event.probeKey);
             return ProxyRuntimeStateStore.quarantineAndCancelEndpoint(currentProxy, event.phase, event.endpointKey, event.probeKey, event.timestamp, event.source, event.origin, event.account, event.activationGeneration, visibleChanged);
+        }
+        if (!rotationOwner && verdict.canRotate) {
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduce decision=rotation_suppressed_by_lifecycle_origin origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + event.phase + " endpoint=" + event.endpointKey);
         }
         if (verdict.canRotate) {
             ProxyRuntimeStateStore.logControl("decision=held_by_failure_hysteresis phase=" + verdict.phase + " failures=" + failure.rotationFailures + " failure_class=" + failureClass + " source=" + event.source + " origin=" + event.origin.wireName + " account=" + event.account + " endpoint=" + event.endpointKey);
@@ -170,12 +208,17 @@ final class ProxyEventReducer {
     }
 
     private static boolean isActiveProxyEvent(ProxyConnectionEvent event) {
-        return event != null && ProxyConnectionEvent.isActiveProxyOrigin(event.origin);
+        return event != null && ProxyConnectionEvent.isHealthOrigin(event.origin);
     }
 
     private static ProxyRuntimeStateStore.Decision reduceConnected(SharedConfig.ProxyInfo currentProxy, ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
         if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
             return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        if (!ProxyConnectionEvent.canDriveVisible(event)) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduceConnected decision=lifecycle_health_only source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=0 rotation_owner=0");
+            return new ProxyRuntimeStateStore.Decision("lifecycle_health_only", event.phase, event.endpointKey, verdict, false, false, false);
         }
         boolean visibleChanged = ProxyVisibleStateStore.markConnected(currentProxy, event.timestamp);
         if (visibleChanged) {
@@ -188,6 +231,17 @@ final class ProxyEventReducer {
         if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
             return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
         }
+        if (!ProxyConnectionEvent.canDriveVisible(event)) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            String decision = ProxyRuntimeStateStore.isResumeGrace(event.timestamp) ? "resume_grace_health_only" : "lifecycle_health_only";
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduceConnectStart decision=" + decision + " source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=0 rotation_owner=0");
+            return new ProxyRuntimeStateStore.Decision(decision, event.phase, event.endpointKey, verdict, false, false, false);
+        }
+        if (shouldKeepVisibleOwnerInResumeGraceTelemetryOnly(event, verdict)) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.reduceConnectStart decision=resume_grace_health_only source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=1 rotation_owner=0");
+            return new ProxyRuntimeStateStore.Decision("resume_grace_health_only", event.phase, event.endpointKey, verdict, false, false, false);
+        }
         boolean visibleChanged = ProxyVisibleStateStore.markConnectionStarting(currentProxy, event.timestamp, event.origin);
         return new ProxyRuntimeStateStore.Decision(visibleChanged ? "visible_only" : "telemetry_only", event.phase, event.endpointKey, verdict, false, visibleChanged, false);
     }
@@ -198,6 +252,11 @@ final class ProxyEventReducer {
         }
         if (currentProxy == null || !ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)) {
             return ProxyRuntimeStateStore.Decision.ignored("ignored_stale_endpoint", event.phase, event.endpointKey, verdict);
+        }
+        if (!ProxyConnectionEvent.canDriveVisible(event)) {
+            ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict);
+            ProxyRuntimeStateStore.logControl("owner=ProxyEventReducer.applyVisibleUsableSuccess decision=lifecycle_health_only source=" + event.source + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + event.account + " phase=" + event.phase + " endpoint=" + event.endpointKey + " visible_owner=0 rotation_owner=0");
+            return new ProxyRuntimeStateStore.Decision("lifecycle_health_only", event.phase, event.endpointKey, verdict, false, false, false);
         }
         boolean visibleChanged = ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration);
         if (!visibleChanged) {
@@ -241,7 +300,7 @@ final class ProxyEventReducer {
         String originName = event.origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName : event.origin.wireName;
         String failureClass = ProxyPhasePolicy.failureClassForPhase(normalized);
         ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForEvent(event);
-        boolean activeSelected = isActiveProxyEvent(event)
+        boolean activeSelected = ProxyConnectionEvent.canDriveRotation(event, verdict)
                 && proxyInfo != null
                 && ProxyEndpointKey.matchesLiveStage(proxyInfo, targetEndpointKey);
         boolean currentUsable = activeSelected && ProxyVisibleStateStore.isCurrentProxyUsable(proxyInfo, event.timestamp);
@@ -275,11 +334,32 @@ final class ProxyEventReducer {
                 && ProxyPhasePolicy.isProxyUsableSuccessPhase(ProxyHealthStore.lastUsablePhase(proxyInfo, event.timestamp));
     }
 
+    private static boolean shouldKeepVisibleOwnerInResumeGraceTelemetryOnly(ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        if (event == null
+                || verdict == null
+                || event.origin != ProxyConnectionEvent.Origin.ACTIVE_SOCKET
+                || !ProxyRuntimeStateStore.isResumeGrace(event.timestamp)
+                || verdict.usableSuccess) {
+            return false;
+        }
+        return verdict.isLivePhase()
+                || (verdict.isFailure() && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(verdict.phase));
+    }
+
     private static String visiblePhaseForVerdict(ProxyEndpointVerdict verdict) {
         if (verdict != null
                 && ProxyEndpointVerdict.FAILURE_CLASS_POST_SUCCESS_DATA_PATH_DEGRADED.equals(verdict.failureClass)) {
             return ProxyCheckDiagnostics.DROPPED_AFTER_APPDATA;
         }
         return verdict == null ? ProxyCheckDiagnostics.UNKNOWN_FAIL : verdict.phase;
+    }
+
+    private static String lifecycleDecisionFor(ProxyConnectionEvent event, ProxyEndpointVerdict verdict) {
+        String phase = verdict == null ? ProxyCheckDiagnostics.normalize(event.phase) : verdict.phase;
+        if (ProxyCheckDiagnostics.MTPROXY_PACKET_SENT_NO_RESPONSE.equals(phase)
+                || ProxyCheckDiagnostics.POST_HANDSHAKE_NO_APPDATA.equals(phase)) {
+            return "lifecycle_data_path_timeout_telemetry_only";
+        }
+        return "lifecycle_health_only";
     }
 }

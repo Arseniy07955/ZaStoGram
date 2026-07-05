@@ -1,6 +1,7 @@
 package com.exteragram.messenger.plugins;
 
 import org.telegram.plugins.PluginInfo;
+import org.telegram.ui.ActionBar.BaseFragment;
 
 import java.util.LinkedHashMap;
 
@@ -41,5 +42,29 @@ public class PluginsController {
     public Plugin getPlugin(String id) {
         refresh();
         return plugins.get(id);
+    }
+
+    public static void openPluginSettings(String id) {
+        openPluginSettings(id, org.telegram.plugins.PluginUtils.getLastFragment());
+    }
+
+    public static void openPluginSettings(String id, BaseFragment from) {
+        if (id == null || id.length() == 0) {
+            return;
+        }
+        BaseFragment fragment = from != null ? from : org.telegram.plugins.PluginUtils.getLastFragment();
+        if (fragment != null) {
+            fragment.presentFragment(new com.exteragram.messenger.plugins.ui.PluginSettingsActivity(id));
+        }
+    }
+
+    public static void openPluginSettings(Plugin plugin) {
+        openPluginSettings(plugin, org.telegram.plugins.PluginUtils.getLastFragment());
+    }
+
+    public static void openPluginSettings(Plugin plugin, BaseFragment from) {
+        if (plugin != null) {
+            openPluginSettings(plugin.getId(), from);
+        }
     }
 }

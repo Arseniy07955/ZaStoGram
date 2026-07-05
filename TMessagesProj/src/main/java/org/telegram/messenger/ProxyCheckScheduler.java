@@ -181,10 +181,6 @@ public class ProxyCheckScheduler {
         ProxyRuntimeStateStore.markConnectionUsable(proxyInfo, diagnostic);
     }
 
-    public static void markEndpointFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
-        ProxyRuntimeStateStore.markEndpointFailure(proxyInfo, diagnostic);
-    }
-
     public static boolean matchesEndpointStageKey(SharedConfig.ProxyInfo proxyInfo, String endpointKey) {
         return ProxyEndpointKey.matchesLiveStage(proxyInfo, endpointKey);
     }

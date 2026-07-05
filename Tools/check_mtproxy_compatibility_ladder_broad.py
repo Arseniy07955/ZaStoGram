@@ -206,9 +206,14 @@ def main() -> int:
     require(
         "if (!isActiveProxyEvent(event))" in native_stage
         and "updateProxyRowOnly" in native_stage
-        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in reducer
-        and native_stage.find("if (!isActiveProxyEvent(event))") < native_stage.find("if (verdict.usableSuccess)"),
-        "candidate/non-active origins must enter row-only handling before active visible status/backoff policy",
+        and "ProxyConnectionEvent.isHealthOrigin(event.origin)" in reducer
+        and "boolean lifecycleHealthOnly = ProxyConnectionEvent.isLifecycleHealthOnly(event)" in native_stage
+        and "if (lifecycleHealthOnly)" in native_stage
+        and "ProxyHealthStore.rememberLifecycleTelemetry(currentProxy, event, verdict)" in native_stage
+        and "lifecycle_health_only" in native_stage
+        and native_stage.find("if (!isActiveProxyEvent(event))") < native_stage.find("if (lifecycleHealthOnly)")
+        and native_stage.find("if (lifecycleHealthOnly)") < native_stage.find("if (verdict.usableSuccess)"),
+        "row-only origins must enter proxy-list handling, and lifecycle health origins must enter health-only handling before visible/backoff policy",
         failures,
     )
     require(

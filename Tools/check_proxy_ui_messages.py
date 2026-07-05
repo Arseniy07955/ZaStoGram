@@ -10,6 +10,9 @@ PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivi
 PROXY_SETTINGS = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxySettingsActivity.java"
 ANDROID_UTILITIES = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java"
 DIAGNOSTICS = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/ProxyCheckDiagnostics.java"
+DIALOGS = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/DialogsActivity.java"
+PROXY_DRAWABLE = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Components/ProxyDrawable.java"
+FILE_LOG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileLog.java"
 
 checks = [
     (STRINGS, 'name="ProxyStatusConnectingSlow"', "missing slow connecting proxy status string"),
@@ -70,6 +73,16 @@ checks = [
     (ANDROID_UTILITIES, "ProxyCheckDiagnostics.diagnosticText", "bottom-sheet proxy failures must use the diagnostic map"),
     (ANDROID_UTILITIES, "if (!started)", "bottom-sheet proxy check must fail fast when the scheduler refuses to start"),
     (ANDROID_UTILITIES, "checking[0] = false;", "bottom-sheet proxy check must clear its checking flag on every terminal path"),
+    (DIAGNOSTICS, "isProxyShieldConnected", "proxy diagnostics must expose shield connected semantics"),
+    (DIAGNOSTICS, "proxyShieldAlertLevel", "proxy diagnostics must expose shield alert severity"),
+    (DIAGNOSTICS, "proxyShieldAlertColorKey", "proxy diagnostics must expose shield alert colors"),
+    (DIALOGS, "proxyDrawable.setStatus", "dialogs proxy shield must consume explicit connected/degraded status"),
+    (DIALOGS, "ProxyCheckDiagnostics.proxyShieldAlertLevel", "dialogs proxy shield must compute degraded severity through diagnostics"),
+    (DIALOGS, "ProxyCheckDiagnostics.proxyShieldAlertColorKey", "dialogs proxy shield must compute degraded color through diagnostics"),
+    (PROXY_DRAWABLE, "private int alertLevel", "proxy shield drawable must keep degraded alert level"),
+    (PROXY_DRAWABLE, "public void setStatus(boolean enabled, boolean value, int alertLevel, int alertColor, boolean animated)", "proxy shield drawable must expose a status API with alert severity"),
+    (PROXY_DRAWABLE, "canvas.drawCircle", "proxy shield drawable must render a degraded badge"),
+    (FILE_LOG, "proxy_diagnostic_session", "forced log rotation must write a diagnostic session marker"),
 ]
 
 for _, needle, message in list(checks):

@@ -247,7 +247,7 @@ def main() -> int:
         "int lastCheckActivationGeneration" in shared_config
         and "mirrorVisiblePhase(SharedConfig.ProxyInfo proxyInfo, String phase, long now, int activationGeneration)" in status_mirror
         and "proxyInfo.lastCheckActivationGeneration = activationGeneration" in status_mirror
-        and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, visiblePhase, event.timestamp, event.activationGeneration)" in visible
+        and "ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, event, visiblePhase)" in visible
         and "ProxyRuntimeStateStore.applyConnectionUsable(currentProxy, event.phase, event.timestamp, event.activationGeneration)" in usable_success_body,
         "visible diagnostic state must record the activationGeneration from native socket verdict events",
         failures,
@@ -312,9 +312,14 @@ def main() -> int:
     stale_generation = reducer_body.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)")
     coalesce_probe = reducer_body.find("ProxyVisibleStateStore.shouldCoalesceProbeWait(currentProxy, event)")
     fresh_failure_hold = reducer_body.find("ProxyVisibleStateStore.shouldHoldVisiblePhaseByFreshFailure(currentProxy, event)")
+    shadow_failure = reducer_body.find("ProxyCheckDiagnostics.SHADOWED_SOCKET_FAILURE.equals(normalizedPhase)")
+    remember_shadow = reducer_body.find("ProxyHealthStore.rememberPostSuccessDataPathShadow")
     require(
-        "ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)" in shadow_body
-        and shadow_body.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)") < shadow_body.find("ProxyHealthStore.rememberPostSuccessDataPathShadow"),
+        stale_generation >= 0
+        and shadow_failure >= 0
+        and remember_shadow >= 0
+        and stale_generation < shadow_failure
+        and stale_generation < remember_shadow,
         "shadowed_socket_failure must obey stale activation generation before consuming post-success shadow budget",
         failures,
     )
@@ -351,11 +356,13 @@ def main() -> int:
     require(
         "isActiveProxyOrigin" in event
         and "case USER_SELECT:" in event
-        and "case STARTUP_RESTORE:" in event
-        and "case BACKGROUND_KEEPALIVE:" in event
-        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in runtime
-        and "ProxyConnectionEvent.isActiveProxyOrigin(event.origin)" in read(MESSENGER / "ProxyEventReducer.java"),
-        "active-socket activation origins must still route through active visible/backoff reducer paths",
+        and "case STARTUP_RESTORE:" not in method_body(event, "public static boolean isActiveProxyOrigin")
+        and "case BACKGROUND_KEEPALIVE:" not in method_body(event, "public static boolean isActiveProxyOrigin")
+        and "isHealthOrigin" in event
+        and "canDriveVisible(ProxyConnectionEvent event)" in event
+        and "canDriveRotation(ProxyConnectionEvent event, ProxyEndpointVerdict verdict)" in event
+        and "ProxyConnectionEvent.isHealthOrigin(event.origin)" in read(MESSENGER / "ProxyEventReducer.java"),
+        "active origins must be split from lifecycle health-only and visible/rotation ownership",
         failures,
     )
     require(
@@ -395,8 +402,8 @@ def main() -> int:
         failures,
     )
     require("proxyActivationGeneration" in connection_socket_h and "proxyActivationOrigin" in connection_socket_h, "ConnectionSocket must store captured activation generation and origin", failures)
-    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines_h, "native delegate must pass activationGeneration and the retry-authority hold", failures)
-    require("CallStaticVoidMethod" in wrapper and "activationGeneration" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper, "JNI stage wrapper must forward activationGeneration and the native hold to Java", failures)
+    require("onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, std::string socketRole, int32_t activationGeneration, int32_t suggestedReconnectHoldMs)" in defines_h, "native delegate must pass socketRole, activationGeneration and the retry-authority hold", failures)
+    require("CallStaticVoidMethod" in wrapper and "socketRoleString" in wrapper and "activationGeneration" in wrapper and "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V" in wrapper, "JNI stage wrapper must forward socketRole, activationGeneration and the native hold to Java", failures)
     require(
         "int activationGeneration = ProxyRuntimeStateStore.noteProxyStartupRestoreActivation(currentAccount)" in java_connections
         and "ProxyConnectionEvent.Origin.STARTUP_RESTORE.wireName" in java_connections
@@ -442,7 +449,7 @@ def main() -> int:
         failures,
     )
 
-    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final int activationGeneration, final int suggestedHoldMs)")
+    java_stage = method_body(java_connections, "public static void onProxyConnectionStageChanged(final int currentAccount, final String diagnostic, final String endpointKey, final String probeKey, final String origin, final String socketRole, final int activationGeneration, final int suggestedHoldMs)")
     require(
         "ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onNativeStage(event)" in java_stage
         and "if (!shouldNotifyProxyConnectionStage(decision))" in java_stage
@@ -462,14 +469,14 @@ def main() -> int:
         "origin == ProxyConnectionEvent.Origin.USER_SELECT" in mark_start
         and "origin == ProxyConnectionEvent.Origin.SETTINGS_CHANGE" in mark_start
         and "ProxyHealthStore.clearUsableSuccessHold(proxyInfo" in mark_start
-        and "ProxyStatusMirror.markConnectionStarting(proxyInfo, now)" in mark_start,
+        and "ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin)" in mark_start,
         "explicit user/settings activation must force connect_start and clear stale usable-success hold",
         failures,
     )
     require(
         "ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, ProxyCheckDiagnostics.CONNECT_START)" in mark_start
         and "decision=held_by_fresh_failure" in mark_start
-        and mark_start.find("ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, ProxyCheckDiagnostics.CONNECT_START)") < mark_start.rfind("ProxyStatusMirror.markConnectionStarting(proxyInfo, now)"),
+        and mark_start.find("ProxyCheckDiagnostics.shouldKeepFreshFailure(proxyInfo, ProxyCheckDiagnostics.CONNECT_START)") < mark_start.rfind("ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin)"),
         "routine Java connect_start must not overwrite a fresh terminal failure",
         failures,
     )

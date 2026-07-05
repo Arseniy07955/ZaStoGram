@@ -452,6 +452,8 @@ public class SharedConfig {
         public String lastCheckDiagnostic = ProxyCheckDiagnostics.UNKNOWN_FAIL;
         public long lastCheckDiagnosticTime;
         public int lastCheckActivationGeneration;
+        public String lastCheckOrigin = "active_socket";
+        public String lastCheckSocketRole = "control_main";
 
         // Live, in-memory only (never serialized): quality + geo shown in the proxy list.
         public long downloadSpeed;       // bytes/sec through the active connection; 0 = unknown

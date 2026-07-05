@@ -90,6 +90,25 @@ std::string Connection::proxyConnectionStageOrigin() {
     return ((int32_t) connectionType & 0x0000ffff) == ConnectionTypeProxy ? "proxy_check" : "active_socket";
 }
 
+std::string Connection::proxyConnectionStageSocketRole() {
+    switch ((int32_t) connectionType & 0x0000ffff) {
+        case ConnectionTypeGeneric:
+            return "control_main";
+        case ConnectionTypeTemp:
+            return "control_secondary";
+        case ConnectionTypeGenericMedia:
+        case ConnectionTypeDownload:
+        case ConnectionTypeUpload:
+            return "media_visible";
+        case ConnectionTypePush:
+            return "background_keepalive";
+        case ConnectionTypeProxy:
+            return "proxy_check";
+        default:
+            return "proxy_check";
+    }
+}
+
 Connection::Connection(Datacenter *datacenter, ConnectionType type, int8_t num) : ConnectionSession(datacenter->instanceNum), ConnectionSocket(datacenter->instanceNum) {
     currentDatacenter = datacenter;
     connectionNum = num;

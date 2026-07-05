@@ -21,6 +21,7 @@ public:
         bool fakeTls = false;
         uint32_t allowedSniVariants = 0;
         uint32_t activationGeneration = 0;
+        uint32_t configGeneration = 0;
         uint64_t ownerToken = 0;
         int64_t now = 0;
         MtProxyAdaptivePolicy::CompatibilityRecipe recipe;

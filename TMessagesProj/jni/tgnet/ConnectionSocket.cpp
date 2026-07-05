@@ -1793,7 +1793,7 @@ bool ConnectionSocket::mtProxyProbeBeginOrJoin(bool ipv6) {
     probeKey.endpointKey = currentMtProxyEndpointKey;
     probeKey.networkEndpointKey = currentMtProxyNetworkEndpointKey;
     probeKey.allowedSniVariants = currentAllowedSniVariants;
-    probeKey.activationGeneration = proxyActivationGeneration;
+    probeKey.configGeneration = proxyConfigGeneration;
     MtProxyProbeCoordinator::Decision probeDecision = MtProxyProbeCoordinator::beginOrJoin(probeKey, mtProxyProbeLease.ownerToken(), now);
     if (probeDecision.kind == MtProxyProbeCoordinator::DecisionKind::ProfilesExhaustedBackoff) {
         MtProxyEndpointRecorder::recordProfilesExhaustedBackoff(
@@ -1948,6 +1948,7 @@ MtProxyEndpointRecorder::FailureContext ConnectionSocket::mtProxyEndpointFailure
     context.fakeTls = currentSecretIsFakeTls;
     context.allowedSniVariants = currentAllowedSniVariants;
     context.activationGeneration = proxyActivationGeneration;
+    context.configGeneration = proxyConfigGeneration;
     context.ownerToken = mtProxyProbeLease.ownerToken();
     context.now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     context.recipe = currentMtProxyCompatibilityRecipe();
@@ -1980,6 +1981,7 @@ MtProxyEndpointRecorder::SuccessContext ConnectionSocket::mtProxyEndpointSuccess
     context.fakeTls = currentSecretIsFakeTls;
     context.allowedSniVariants = currentAllowedSniVariants;
     context.activationGeneration = proxyActivationGeneration;
+    context.configGeneration = proxyConfigGeneration;
     context.ownerToken = mtProxyProbeLease.ownerToken();
     context.now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     context.recipe = currentMtProxyCompatibilityRecipe();
@@ -2001,6 +2003,7 @@ MtProxyEndpointRecorder::ProbeBackoffContext ConnectionSocket::mtProxyEndpointPr
     context.fakeTls = currentSecretIsFakeTls;
     context.allowedSniVariants = currentAllowedSniVariants;
     context.activationGeneration = proxyActivationGeneration;
+    context.configGeneration = proxyConfigGeneration;
     context.ownerToken = mtProxyProbeLease.ownerToken();
     context.now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     context.recipe = currentMtProxyCompatibilityRecipe();
@@ -3283,6 +3286,7 @@ bool ConnectionSocket::resetTransportSocketForOpenConnection() {
 void ConnectionSocket::openConnection(std::string address, uint16_t port, std::string secret, bool ipv6, int32_t networkType, int32_t datacenterId, bool mediaConnection) {
     ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
     proxyActivationGeneration = manager.getProxyActivationGeneration();
+    proxyConfigGeneration = manager.getProxyConfigGeneration();
     proxyActivationOrigin = manager.getProxyActivationOrigin();
     if (LOGS_ENABLED && mtProxyProbeLease.active()) DEBUG_D("connection(%p) mtproxy_startup probe_owner_release key=%s token=%llu", this, mtProxyProbeLease.key().c_str(), (unsigned long long) mtProxyProbeLease.ownerToken());
     mtProxyProbeLease.release();
@@ -3997,7 +4001,13 @@ void ConnectionSocket::publishProxyConnectionStage(const char *diagnostic) {
         if (origin == "active_socket" && !proxyActivationOrigin.empty()) {
             origin = proxyActivationOrigin;
         }
-        manager.delegate->onProxyConnectionStageChanged(instanceNum, diagnostic, endpointKey, currentMtProxyProbeKey, origin, (int32_t) proxyActivationGeneration, (int32_t) proxySuggestedReconnectHoldMs);
+        std::string socketRole = proxyConnectionStageSocketRole();
+        if (origin == "background_keepalive") {
+            socketRole = "background_keepalive";
+        } else if (origin == "startup_restore") {
+            socketRole = "startup_restore";
+        }
+        manager.delegate->onProxyConnectionStageChanged(instanceNum, diagnostic, endpointKey, currentMtProxyProbeKey, origin, socketRole, (int32_t) proxyActivationGeneration, (int32_t) proxySuggestedReconnectHoldMs);
     }
 }
 
@@ -4018,6 +4028,10 @@ void ConnectionSocket::publishMtProxySocketObservation(const MtProxySocketObserv
 
 std::string ConnectionSocket::proxyConnectionStageOrigin() {
     return "active_socket";
+}
+
+std::string ConnectionSocket::proxyConnectionStageSocketRole() {
+    return "control_main";
 }
 
 bool ConnectionSocket::matchesMtProxyEndpointKey(const std::string &endpointKey) {

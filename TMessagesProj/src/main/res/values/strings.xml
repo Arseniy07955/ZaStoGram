@@ -242,8 +242,9 @@
     <string name="ProxyStatusFaketlsServerClosedTerminal">TCP opened, but the server closed the connection after FakeTLS ClientHello. The server may reject this profile/SNI/secret, or filtering may close the connection.</string>
     <string name="ProxyStatusBackgroundHandshakeAborted">Handshake stopped while app was in background</string>
     <string name="ProxyStatusHandshakeProfilesExhausted">MTProxy handshake profiles exhausted; retrying with backoff</string>
-    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy packet sent, no server response</string>
-    <string name="ProxyStatusPostHandshakeNoAppData">Handshake passed, no MTProto data arrived</string>
+    <string name="ProxyStatusRestoringProxy">Restoring proxy connection...</string>
+    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy packet sent, no server response. The proxy is reachable over TCP, but the data-path is not answering.</string>
+    <string name="ProxyStatusPostHandshakeNoAppData">MTProxy packet sent, no server response. The proxy is reachable over TCP, but the data-path is not answering.</string>
     <string name="ProxyStatusDroppedEarlyAfterAppData">Connected, then dropped soon after first data</string>
     <string name="ProxyStatusDroppedAfterAppData">Connected, then dropped after first data</string>
     <string name="ProxyStatusCancelled">Check cancelled</string>
@@ -5315,6 +5316,12 @@
     <string name="ShowForwardingOptions">Show forwarding options</string>
     <string name="ShowCaption">Show caption</string>
     <string name="HideCaption">Hide caption</string>
+    <string name="EditableForwardMode">Editable forwarding</string>
+    <string name="EditableForwardAlbum">Send as album</string>
+    <string name="EditableForwardSeparatePosts">Send as separate posts</string>
+    <string name="EditableForwardEditCaption">Edit caption</string>
+    <string name="EditableForwardCaptionHint">Caption</string>
+    <string name="EditableForwardUnsupported">This message cannot be sent as an editable copy</string>
     <string name="TapForForwardingOptions">Tap here for forwarding options</string>
     <string name="TapForReplyOptions">Tap here for reply options</string>
     <string name="SetWallpapers">Set Wallpaper</string>
@@ -6676,6 +6683,7 @@
     <string name="StoryHintSwipeToZoom">Swipe to zoom</string>
     <string name="SaveImage">Save Image</string>
     <string name="SaveVideo">Save Video</string>
+    <string name="SaveCurrentFrame">Save Current Frame</string>
     <string name="SaveToProfile">Save to Profile</string>
     <string name="ArchiveStory">Archive Story</string>
     <string name="ArchiveStories_one">Archive Story</string>

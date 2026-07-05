@@ -318,11 +318,10 @@ def main() -> int:
     begin_attempt = method_body(engine, "Attempt beginScheduledAttempt")
     record_switch = method_body(engine, "void recordSwitch")
     is_candidate_allowed = method_body(engine, "private boolean isCandidateAllowed")
-    should_schedule_fallback = method_body(store, "public static boolean shouldScheduleFallback")
     on_runtime_event_facade = method_body(store, "public static Decision onRuntimeEvent")
     on_native_stage_facade = method_body(store, "public static Decision onNativeStage")
+    quarantine_endpoint = method_body(store, "static Decision quarantineAndCancelEndpoint(SharedConfig.ProxyInfo proxyInfo, String phase, String endpointKey, String probeKey, long now, String source, ProxyConnectionEvent.Origin origin, int account, int activationGeneration, boolean visibleChanged)")
     on_native_stage = method_body(reducer, "static ProxyRuntimeStateStore.Decision reduce")
-    mark_endpoint_failure = method_body(store, "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
 
     require(
         "return onRuntimeEvent(event)" in on_native_stage_facade
@@ -466,15 +465,16 @@ def main() -> int:
         failures,
     )
     require(
-        "ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure" in store
-        and "failure.rotationAllowed" in store,
-        "runtime store must use health-store rotationAllowed instead of rotating on the first punitive phase",
+        "ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure" in on_native_stage
+        and "failure.rotationAllowed" in on_native_stage,
+        "reducer must use health-store rotationAllowed instead of rotating on the first punitive phase",
         failures,
     )
     require(
-        "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure" in store
+        "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure" not in store
+        and "public static boolean shouldScheduleFallback" not in store
         and "EndpointFailureResult.noop" in health,
-        "explicit endpoint failures must return a health-store failure result for scheduled rotation attempts",
+        "legacy public endpoint-failure/fallback bypasses must be removed from the runtime facade",
         failures,
     )
     require(
@@ -485,17 +485,29 @@ def main() -> int:
     )
     require(
         ordered(
-            should_schedule_fallback,
-            "boolean result = candidate && failure.rotationAllowed;",
-            "quarantineAndCancelEndpoint(currentProxy, normalized, endpointKey",
-            "decision=trigger",
+            on_native_stage,
+            "ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure",
+            "if (rotationOwner && verdict.canRotate && failure.rotationAllowed)",
+            "quarantineAndCancelEndpoint(currentProxy, event.phase, event.endpointKey",
         ),
-        "fallback scheduling must quarantine the exact endpoint, ignore its late telemetry, and cancel endpoint checks before logging trigger",
+        "reducer rotation trigger must hand off exact endpoint quarantine through the shared runtime helper",
         failures,
     )
     require(
-        "quarantineAndCancelEndpoint(proxyInfo, normalized, ProxyEndpointKey.liveStage(proxyInfo)" in mark_endpoint_failure,
-        "scheduled explicit rotation failures must quarantine and ignore the rotated-away endpoint too",
+        ordered(
+            quarantine_endpoint,
+            "ProxyHealthStore.ignoreEndpointTelemetry",
+            "ProxyCheckScheduler.cancelEndpointAttempts",
+            "ConnectionsManager.cancelProxyEndpointAttempts",
+            "decision=rotation_trigger",
+        ),
+        "rotation quarantine helper must ignore late telemetry and cancel endpoint checks before logging trigger",
+        failures,
+    )
+    require(
+        "ProxyConnectionEvent.rotationTimeout" in complete_attempt
+        and "ProxyRuntimeStateStore.onRuntimeEvent(event)" in complete_attempt,
+        "scheduled explicit rotation failures must enter the reducer before switching candidates",
         failures,
     )
     require(
@@ -508,9 +520,10 @@ def main() -> int:
     require(
         ordered(
             complete_attempt,
-            "ProxyRuntimeStateStore.markEndpointFailure(currentProxy, ProxyCheckDiagnostics.CONNECTING_TIMEOUT)",
-            "if (!failure.rotationAllowed)",
-            "SwitchDecision.held(\"held_by_failure_hysteresis\"",
+            "ProxyConnectionEvent.rotationTimeout",
+            "ProxyRuntimeStateStore.onRuntimeEvent(event)",
+            "if (!decision.rotationTrigger)",
+            "SwitchDecision.held(heldDecision",
             "return selectSwitchCandidate(currentProxy, now)",
         ),
         "connecting timeout must respect failure hysteresis before selecting a fallback",
@@ -518,37 +531,41 @@ def main() -> int:
     )
     require(
         "ProxyRuntimeStateStore.isCurrentProxyUsable(currentProxy)" in complete_attempt
-        and complete_attempt.find("isCurrentProxyUsable") < complete_attempt.find("markEndpointFailure"),
+        and complete_attempt.find("isCurrentProxyUsable") < complete_attempt.find("ProxyConnectionEvent.rotationTimeout"),
         "scheduled rotation attempts must hold while the current proxy is fresh-usable or selected account is connected/updating",
         failures,
     )
     require(
-        "failure.rotationAllowed" in should_schedule_fallback
-        and "held_by_failure_hysteresis" in should_schedule_fallback,
-        "terminal-stage fallback scheduling must wait for the health-store hysteresis threshold",
+        "failure.rotationAllowed" in on_native_stage
+        and "held_by_failure_hysteresis" in on_native_stage
+        and "ignored_non_rotation_trigger" in rotation,
+        "terminal-stage fallback scheduling must wait for the reducer/health-store hysteresis threshold",
         failures,
     )
     require(
-        "ProxyPhasePolicy.isPunitiveFailure(normalized)" in should_schedule_fallback
-        and "decision=ignored_non_punitive" in should_schedule_fallback
-        and "decision=held_by_usable_success" in should_schedule_fallback
-        and "decision=dns_outage_hold" in should_schedule_fallback
-        and "decision=waiting_hysteresis" in should_schedule_fallback
-        and "decision=trigger" in should_schedule_fallback,
-        "fallback scheduling must log explicit proxy_rotation decisions and reject non-punitive or DNS-outage phases before hysteresis",
+        "ProxyPhasePolicy.isPunitiveFailure(verdict.phase)" in on_native_stage
+        and "decision=held_by_usable_success" in on_native_stage
+        and "decision=dns_outage_hold" in on_native_stage
+        and "decision=held_by_failure_hysteresis" in on_native_stage
+        and "decision=rotation_trigger" in on_native_stage
+        and "rotationTrigger" in rotation,
+        "fallback scheduling must use explicit reducer decisions and reject held/non-trigger phases before scheduling",
         failures,
     )
     rotation_stage_idx = rotation.find("NotificationCenter.proxyConnectionStageChanged")
     rotation_stage_branch = rotation[rotation_stage_idx:] if rotation_stage_idx >= 0 else ""
     rotation_stage_branch = rotation_stage_branch[:rotation_stage_branch.find("private void scheduleSwitch")] if "private void scheduleSwitch" in rotation_stage_branch else rotation_stage_branch
     require(
-        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in connections
+        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0)" in connections
         and "args.length >= 4 && args[3] instanceof Integer" in rotation_stage_branch
-        and "ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, \"\", origin, activationGeneration)" in rotation_stage_branch
+        and "args.length >= 5 && args[4] instanceof String" in rotation_stage_branch
+        and "args.length >= 6 && args[5] instanceof String" in rotation_stage_branch
+        and "args.length >= 7" in rotation_stage_branch
+        and "ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, \"\", origin, socketRole, activationGeneration" in rotation_stage_branch
         and "ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)" in rotation_stage_branch
         and "decision=ignored_stale_generation" in rotation_stage_branch
-        and rotation_stage_branch.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)") < rotation_stage_branch.find("ProxyRuntimeStateStore.shouldScheduleFallback"),
-        "rotation controller must receive activationGeneration from proxyConnectionStageChanged and gate stale native stages before fallback scheduling",
+        and rotation_stage_branch.find("ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)") < rotation_stage_branch.find("if (!rotationTrigger)"),
+        "rotation controller must receive activationGeneration/socketRole/reducer decision from proxyConnectionStageChanged and gate stale native stages before scheduling",
         failures,
     )
     require(
@@ -573,23 +590,9 @@ def main() -> int:
         failures,
     )
     require(
-        "shouldHoldHostResolveFailureByDnsOutage(proxyInfo, normalized, now)" in mark_endpoint_failure
-        and ordered(
-            mark_endpoint_failure,
-            "shouldHoldHostResolveFailureByDnsOutage(proxyInfo, normalized, now)",
-            "decision=dns_outage_hold",
-            "ProxyWarmupGate.onProxyFailure",
-            "ProxyHealthStore.rememberLiveFailure",
-        ),
-        "explicit host_resolve_failed endpoint failures must be held by DNS outage before warmup failure or endpoint backoff",
-        failures,
-    )
-    require(
         "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, event.phase, event.timestamp)" in on_native_stage
-        and "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(proxyInfo, normalized, now)" in mark_endpoint_failure
-        and "shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, normalized, now)" in should_schedule_fallback
-        and "previous_dns_outage" in store,
-        "connection_not_started that follows a DNS outage must stay telemetry-only and must not backoff, rotate, or schedule fallback",
+        and "previous_dns_outage" in on_native_stage,
+        "connection_not_started that follows a DNS outage must stay telemetry-only and must not backoff or rotate",
         failures,
     )
     require(

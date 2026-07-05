@@ -211,7 +211,6 @@ import java.io.RandomAccessFile;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.net.IDN;
 import java.nio.ByteBuffer;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -277,6 +276,7 @@ public class AndroidUtilities {
     private static int prevOrientation = -10;
     private static boolean waitingForSms = false;
     private static boolean waitingForCall = false;
+    private static String lastClipboardProxyAlertKey;
     private static final Object smsLock = new Object();
     private static final Object callLock = new Object();
 
@@ -4593,65 +4593,32 @@ public class AndroidUtilities {
                 return false;
             }
             Uri data = intent.getData();
-            if (data != null) {
-                String user = null;
-                String password = null;
-                String port = null;
-                String address = null;
-                String secret = null;
-                String scheme = data.getScheme();
-                if (scheme != null) {
-                    if ((scheme.equals("http") || scheme.equals("https"))) {
-                        String host = data.getHost().toLowerCase();
-                        if (host.equals("telegram.me") || host.equals("t.me") || host.equals("telegram.dog")) {
-                            String path = data.getPath();
-                            if (path != null) {
-                                if (path.startsWith("/socks") || path.startsWith("/proxy")) {
-                                    address = data.getQueryParameter("server");
-                                    if (AndroidUtilities.checkHostForPunycode(address)) {
-                                        address = IDN.toASCII(address, IDN.ALLOW_UNASSIGNED);
-                                    }
-                                    port = data.getQueryParameter("port");
-                                    user = data.getQueryParameter("user");
-                                    password = data.getQueryParameter("pass");
-                                    secret = data.getQueryParameter("secret");
-                                }
-                            }
-                        }
-                    } else if (scheme.equals("tg")) {
-                        String url = data.toString();
-                        if (url.startsWith("tg:proxy") || url.startsWith("tg://proxy") || url.startsWith("tg:socks") || url.startsWith("tg://socks")) {
-                            url = url.replace("tg:proxy", "tg://telegram.org").replace("tg://proxy", "tg://telegram.org").replace("tg://socks", "tg://telegram.org").replace("tg:socks", "tg://telegram.org");
-                            data = Uri.parse(url);
-                            address = data.getQueryParameter("server");
-                            if (AndroidUtilities.checkHostForPunycode(address)) {
-                                address = IDN.toASCII(address, IDN.ALLOW_UNASSIGNED);
-                            }
-                            port = data.getQueryParameter("port");
-                            user = data.getQueryParameter("user");
-                            password = data.getQueryParameter("pass");
-                            secret = data.getQueryParameter("secret");
-                        }
-                    }
+            ProxyLinkHelper.ProxyLink link = data != null ? ProxyLinkHelper.parse(data.toString()) : null;
+            if (link != null && link.type != ProxyLinkHelper.TYPE_WSS) {
+                if (invoked) {
+                    showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret);
                 }
-                if (!TextUtils.isEmpty(address) && !TextUtils.isEmpty(port)) {
-                    if (user == null) {
-                        user = "";
-                    }
-                    if (password == null) {
-                        password = "";
-                    }
-                    if (secret == null) {
-                        secret = "";
-                    }
-                    if (invoked) showProxyAlert(activity, address, port, user, password, secret);
-                    return true;
-                }
+                return true;
             }
         } catch (Exception ignore) {
 
         }
         return false;
+    }
+
+    public static boolean showClipboardProxyAlertIfNeeded(Activity activity) {
+        ProxyLinkHelper.ProxyLink link = ProxyLinkHelper.firstFromClipboard(activity);
+        if (link == null || link.type == ProxyLinkHelper.TYPE_WSS) {
+            lastClipboardProxyAlertKey = null;
+            return false;
+        }
+        String key = ProxyLinkHelper.dedupeKey(link);
+        if (TextUtils.equals(lastClipboardProxyAlertKey, key)) {
+            return false;
+        }
+        lastClipboardProxyAlertKey = key;
+        showProxyAlert(activity, link.address, String.valueOf(link.port), link.username, link.password, link.secret);
+        return true;
     }
 
     public static float getAnimatorDurationScale() {

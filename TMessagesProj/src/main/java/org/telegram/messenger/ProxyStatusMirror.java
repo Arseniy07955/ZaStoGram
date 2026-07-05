@@ -60,10 +60,16 @@ final class ProxyStatusMirror {
         proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK;
         proxyInfo.lastCheckDiagnosticTime = now;
         proxyInfo.lastCheckActivationGeneration = 0;
+        proxyInfo.lastCheckOrigin = ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName;
+        proxyInfo.lastCheckSocketRole = ProxyConnectionEvent.SocketRole.CONTROL_MAIN.wireName;
     }
 
     static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, long now) {
         mirrorVisiblePhase(proxyInfo, ProxyCheckDiagnostics.CONNECT_START, now);
+    }
+
+    static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo, long now, ProxyConnectionEvent.Origin origin) {
+        mirrorVisiblePhase(proxyInfo, ProxyCheckDiagnostics.CONNECT_START, now, 0, origin, ProxyConnectionEvent.SocketRole.CONTROL_MAIN);
     }
 
     static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now) {
@@ -142,11 +148,25 @@ final class ProxyStatusMirror {
     }
 
     static void mirrorVisiblePhase(SharedConfig.ProxyInfo proxyInfo, String phase, long now, int activationGeneration) {
+        mirrorVisiblePhase(proxyInfo, phase, now, activationGeneration, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, ProxyConnectionEvent.SocketRole.CONTROL_MAIN);
+    }
+
+    static void mirrorVisiblePhase(SharedConfig.ProxyInfo proxyInfo, ProxyConnectionEvent event, String phase) {
+        if (event == null) {
+            mirrorVisiblePhase(proxyInfo, phase, SystemClock.elapsedRealtime());
+            return;
+        }
+        mirrorVisiblePhase(proxyInfo, phase, event.timestamp, event.activationGeneration, event.origin, event.socketRole);
+    }
+
+    static void mirrorVisiblePhase(SharedConfig.ProxyInfo proxyInfo, String phase, long now, int activationGeneration, ProxyConnectionEvent.Origin origin, ProxyConnectionEvent.SocketRole socketRole) {
         if (proxyInfo == null) {
             return;
         }
         proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.normalize(phase);
         proxyInfo.lastCheckDiagnosticTime = now;
         proxyInfo.lastCheckActivationGeneration = activationGeneration;
+        proxyInfo.lastCheckOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName : origin.wireName;
+        proxyInfo.lastCheckSocketRole = socketRole == null ? ProxyConnectionEvent.SocketRole.CONTROL_MAIN.wireName : socketRole.wireName;
     }
 }

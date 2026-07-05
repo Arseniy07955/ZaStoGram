@@ -25,7 +25,7 @@ public:
         std::string endpointKey;
         std::string networkEndpointKey;
         uint32_t allowedSniVariants = 0;
-        uint32_t activationGeneration = 0;
+        uint32_t configGeneration = 0;
     };
 
     struct GreaseProbeResult {
@@ -70,6 +70,7 @@ public:
                                          bool recipeUsesGrease,
                                          bool recipeIsGreaseProbe,
                                          bool classicFallbackAllowed,
+                                         bool advanceRecipe,
                                          int64_t now);
     static void completeSuccess(const ProbeKey &probeKey,
                                 uint64_t callerToken,
@@ -83,6 +84,7 @@ public:
     static void reapExpired(int64_t now);
 
     static bool failureNeedsRecipe(const std::string &diagnostic);
+    static bool failureCountsTowardHandshakeBudget(const std::string &diagnostic, uint64_t responseSignature);
     static MtProxyAdaptivePolicy::RecipeCursor recipeCursorForProbe(const std::string &probeKey);
     static MtProxyAdaptivePolicy::RecipeCursor workingRecipeCursorForProbe(const std::string &probeKey);
     static MtProxyAdaptivePolicy::CompatibilityRecipe workingRecipeForProbe(const std::string &probeKey);

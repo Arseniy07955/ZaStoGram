@@ -1,10 +1,12 @@
 """android_utils — UI-thread helpers, listener wrappers and logging for plugins."""
 
-from java import dynamic_proxy
-from java.lang import Runnable
+from java import dynamic_proxy, jclass
 from android.view import View
 
 from org.telegram.messenger import AndroidUtilities, FileLog, LocaleController
+
+
+Runnable = jclass("java.lang.Runnable")
 
 
 def log(msg):
@@ -49,6 +51,9 @@ class _Runnable(dynamic_proxy(Runnable)):
             self.fn()
         except Exception as e:
             log(e)
+
+
+R = _Runnable
 
 
 def run_on_ui_thread(fn, delay=0):

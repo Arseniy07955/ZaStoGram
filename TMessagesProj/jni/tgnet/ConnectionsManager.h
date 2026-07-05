@@ -75,6 +75,7 @@ public:
     void setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, const MtProxyOptions &options, uint32_t activationGeneration, std::string activationOrigin);
     void setProxyActivationContext(uint32_t activationGeneration, std::string activationOrigin);
     uint32_t getProxyActivationGeneration();
+    uint32_t getProxyConfigGeneration();
     std::string getProxyActivationOrigin();
     void setWssTransportSettings(int32_t mode, int32_t gatewayMode, std::string host, uint16_t port, std::string path, bool miniApps, std::string socksHost, uint16_t socksPort, std::string socksUsername, std::string socksPassword, bool socksEnabled, bool enabled);
     void setLangCode(std::string langCode);
@@ -215,6 +216,7 @@ private:
     uint16_t proxyPort = 1080;
     MtProxyOptions proxyMtProxyOptions;
     uint32_t proxyActivationGeneration = 0;
+    uint32_t proxyConfigGeneration = 0;
     std::string proxyActivationOrigin = "active_socket";
     int32_t wssTransportMode = 0;
     int32_t wssGatewayMode = 0;

@@ -113,13 +113,23 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
             int activationGeneration = args.length >= 4 && args[3] instanceof Integer
                     ? (Integer) args[3]
                     : 0;
-            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, "", origin, activationGeneration);
-            if (!ProxyConnectionEvent.isActiveProxyOrigin(event.origin)) {
-                log("ignore_non_active_origin origin=" + origin + " phase=" + event.phase + " endpoint=" + endpointKey);
+            String socketRole = args.length >= 5 && args[4] instanceof String
+                    ? (String) args[4]
+                    : "";
+            String reducerDecision = args.length >= 6 && args[5] instanceof String
+                    ? (String) args[5]
+                    : "";
+            boolean rotationTrigger = args.length >= 7
+                    && ((args[6] instanceof Integer && (Integer) args[6] != 0)
+                    || (args[6] instanceof Boolean && (Boolean) args[6]));
+            ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(account, diagnostic, endpointKey, "", origin, socketRole, activationGeneration, 0, android.os.SystemClock.elapsedRealtime());
+            ProxyEndpointVerdict verdict = ProxyPhasePolicy.verdictForEvent(event);
+            if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
+                ProxyRuntimeStateStore.logRotation("owner=ProxyRotationController.didReceivedNotification decision=ignored_stale_generation phase=" + event.phase + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " endpoint=" + endpointKey + " activation_generation=" + activationGeneration);
                 return;
             }
-            if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
-                ProxyRuntimeStateStore.logRotation("decision=ignored_stale_generation phase=" + event.phase + " endpoint=" + endpointKey + " activation_generation=" + activationGeneration);
+            if (!ProxyConnectionEvent.canDriveVisible(event)) {
+                log("owner=ProxyRotationController.didReceivedNotification decision=rotation_suppressed_by_lifecycle_origin origin=" + origin + " role=" + event.socketRole.wireName + " phase=" + event.phase + " endpoint=" + endpointKey);
                 return;
             }
             if (ProxyPhasePolicy.isProxyUsableSuccessPhase(event.phase)
@@ -129,7 +139,12 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 log("cancel usable_success phase=" + event.phase + " endpoint=" + endpointKey + " hold_ms=" + ProxyRuntimeStateStore.usableSuccessRemainingMs(SharedConfig.currentProxy));
                 return;
             }
-            if (!ProxyRuntimeStateStore.shouldScheduleFallback(account, event.phase, endpointKey)) {
+            if (!ProxyConnectionEvent.canDriveRotation(event, verdict)) {
+                log("owner=ProxyRotationController.didReceivedNotification decision=ignored_non_rotation_owner origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " phase=" + event.phase + " endpoint=" + endpointKey);
+                return;
+            }
+            if (!rotationTrigger) {
+                log("owner=ProxyRotationController.didReceivedNotification decision=ignored_non_rotation_trigger reducer_decision=" + reducerDecision + " phase=" + event.phase + " endpoint=" + endpointKey);
                 return;
             }
             int state = ConnectionsManager.getInstance(account).getConnectionState();

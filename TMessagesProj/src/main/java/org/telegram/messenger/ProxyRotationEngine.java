@@ -80,10 +80,14 @@ final class ProxyRotationEngine {
         attempt.terminal = true;
         scheduledAttempt = null;
         if (ProxyCheckDiagnostics.CONNECTING_TIMEOUT.equals(attempt.reason)) {
-            ProxyHealthStore.EndpointFailureResult failure = ProxyRuntimeStateStore.markEndpointFailure(currentProxy, ProxyCheckDiagnostics.CONNECTING_TIMEOUT);
-            if (!failure.rotationAllowed) {
+            int activationGeneration = ProxyRuntimeStateStore.currentActivationGenerationForEvent(UserConfig.selectedAccount, ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
+            ProxyConnectionEvent event = ProxyConnectionEvent.rotationTimeout(UserConfig.selectedAccount, currentProxy, ProxyCheckDiagnostics.CONNECTING_TIMEOUT, activationGeneration, now);
+            ProxyRuntimeStateStore.Decision decision = ProxyRuntimeStateStore.onRuntimeEvent(event);
+            if (!decision.rotationTrigger) {
+                ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.lastFailureResult(currentProxy, event.phase, now);
                 generation++;
-                return SwitchDecision.held("held_by_failure_hysteresis", 0, failure.diagnostic, ProxyPhasePolicy.failureClassForPhase(failure.diagnostic), failure.rotationFailures);
+                String heldDecision = "backoff".equals(decision.decision) ? "held_by_failure_hysteresis" : decision.decision;
+                return SwitchDecision.held(heldDecision, 0, event.phase, ProxyPhasePolicy.failureClassForPhase(event.phase), failure.rotationFailures);
             }
         }
         return selectSwitchCandidate(currentProxy, now);

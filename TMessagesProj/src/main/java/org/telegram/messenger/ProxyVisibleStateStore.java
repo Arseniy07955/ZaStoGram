@@ -12,6 +12,9 @@ final class ProxyVisibleStateStore {
     private static String pendingDnsVisibleEndpointKey = "";
     private static String pendingDnsVisiblePhase = "";
     private static int pendingDnsVisibleAccount = -1;
+    private static ProxyConnectionEvent.Origin pendingDnsVisibleOrigin = ProxyConnectionEvent.Origin.ACTIVE_SOCKET;
+    private static ProxyConnectionEvent.SocketRole pendingDnsVisibleSocketRole = ProxyConnectionEvent.SocketRole.CONTROL_MAIN;
+    private static int pendingDnsVisibleActivationGeneration;
     private static long pendingDnsVisibleStartedAtMs;
     private static String lastVisibleProbeWaitEndpointKey = "";
     private static String lastVisibleProbeWaitProbeKey = "";
@@ -100,6 +103,9 @@ final class ProxyVisibleStateStore {
         pendingDnsVisibleEndpointKey = event.endpointKey;
         pendingDnsVisiblePhase = event.phase;
         pendingDnsVisibleAccount = event.account;
+        pendingDnsVisibleOrigin = event.origin;
+        pendingDnsVisibleSocketRole = event.socketRole;
+        pendingDnsVisibleActivationGeneration = event.activationGeneration;
         pendingDnsVisibleStartedAtMs = event.timestamp;
         AndroidUtilities.runOnUIThread(() -> promotePendingDnsVisiblePhase(generation), DNS_VISIBLE_DELAY_MS);
     }
@@ -112,6 +118,9 @@ final class ProxyVisibleStateStore {
         pendingDnsVisibleEndpointKey = "";
         pendingDnsVisiblePhase = "";
         pendingDnsVisibleAccount = -1;
+        pendingDnsVisibleOrigin = ProxyConnectionEvent.Origin.ACTIVE_SOCKET;
+        pendingDnsVisibleSocketRole = ProxyConnectionEvent.SocketRole.CONTROL_MAIN;
+        pendingDnsVisibleActivationGeneration = 0;
         pendingDnsVisibleStartedAtMs = 0;
     }
 
@@ -126,7 +135,7 @@ final class ProxyVisibleStateStore {
         if (shouldHoldVisiblePhaseByFreshFailure(proxyInfo, event)) {
             return false;
         }
-        ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, visiblePhase, event.timestamp, event.activationGeneration);
+        ProxyStatusMirror.mirrorVisiblePhase(proxyInfo, event, visiblePhase);
         return true;
     }
 
@@ -201,13 +210,12 @@ final class ProxyVisibleStateStore {
         }
         clearPendingDnsVisiblePhase(ProxyEndpointKey.liveStage(proxyInfo), now);
         boolean forceVisibleActivation = origin == ProxyConnectionEvent.Origin.USER_SELECT
-                || origin == ProxyConnectionEvent.Origin.SETTINGS_CHANGE
-                || origin == ProxyConnectionEvent.Origin.STARTUP_RESTORE;
+                || origin == ProxyConnectionEvent.Origin.SETTINGS_CHANGE;
         if (forceVisibleActivation) {
             resetProbeWaitCoalescing();
             ProxyHealthStore.clearUsableSuccessHold(proxyInfo, now, origin.wireName);
-            ProxyStatusMirror.markConnectionStarting(proxyInfo, now);
-            ProxyRuntimeStateStore.logControl("decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
+            ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin);
+            ProxyRuntimeStateStore.logControl("owner=ProxyVisibleStateStore.markConnectionStarting decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
             return true;
         }
         if (ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)) {
@@ -226,8 +234,8 @@ final class ProxyVisibleStateStore {
             ProxyRuntimeStateStore.logControl("decision=held_live_by_current_proxy_usable source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + heldByCurrentProxyPhase(proxyInfo, now));
             return false;
         }
-        ProxyStatusMirror.markConnectionStarting(proxyInfo, now);
-        ProxyRuntimeStateStore.logControl("decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
+        ProxyStatusMirror.markConnectionStarting(proxyInfo, now, origin);
+        ProxyRuntimeStateStore.logControl("owner=ProxyVisibleStateStore.markConnectionStarting decision=visible_only source=" + ProxyConnectionEvent.SOURCE_CONNECT_START + " origin=" + origin.wireName + " phase=" + ProxyCheckDiagnostics.CONNECT_START + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
         return true;
     }
 
@@ -254,11 +262,21 @@ final class ProxyVisibleStateStore {
         String endpointKey = pendingDnsVisibleEndpointKey;
         String phase = pendingDnsVisiblePhase;
         int account = pendingDnsVisibleAccount;
+        ProxyConnectionEvent.Origin origin = pendingDnsVisibleOrigin;
+        ProxyConnectionEvent.SocketRole socketRole = pendingDnsVisibleSocketRole;
+        int activationGeneration = pendingDnsVisibleActivationGeneration;
         long startedAtMs = pendingDnsVisibleStartedAtMs;
         long now = SystemClock.elapsedRealtime();
+        ProxyConnectionEvent event = ProxyConnectionEvent.nativeStage(account, phase, endpointKey, "", origin.wireName, socketRole.wireName, activationGeneration, 0, now);
+        if (ProxyRuntimeStateStore.shouldIgnoreStaleActivationGeneration(event)) {
+            ProxyRuntimeStateStore.logControl("owner=ProxyVisibleStateStore.promotePendingDnsVisiblePhase decision=ignored_stale_generation source=" + ProxyConnectionEvent.SOURCE_NATIVE_STAGE + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + account + " phase=" + phase + " endpoint=" + endpointKey + " activation_generation=" + event.activationGeneration);
+            clearPendingDnsVisiblePhase(endpointKey, now);
+            return;
+        }
         if (currentProxy == null
                 || !ProxyEndpointKey.matchesTelemetryEndpointKey(currentProxy, endpointKey)
                 || !shouldDelayDnsVisiblePhase(phase)
+                || !ProxyConnectionEvent.canDriveVisible(event)
                 || now - startedAtMs < DNS_VISIBLE_DELAY_MS
                 || currentProxy.lastCheckDiagnosticTime > startedAtMs
                 || ProxyHealthStore.hasFreshUsableSuccess(currentProxy, now)
@@ -267,11 +285,11 @@ final class ProxyVisibleStateStore {
             clearPendingDnsVisiblePhase(endpointKey, now);
             return;
         }
-        ProxyStatusMirror.mirrorVisiblePhase(currentProxy, phase, now);
-        ProxyRuntimeStateStore.logControl("decision=visible_delayed_dns source=" + ProxyConnectionEvent.SOURCE_NATIVE_STAGE + " account=" + account + " phase=" + phase + " endpoint=" + endpointKey + " delay_ms=" + (now - startedAtMs));
+        ProxyStatusMirror.mirrorVisiblePhase(currentProxy, event, phase);
+        ProxyRuntimeStateStore.logControl("owner=ProxyVisibleStateStore.promotePendingDnsVisiblePhase decision=visible_delayed_dns source=" + ProxyConnectionEvent.SOURCE_NATIVE_STAGE + " origin=" + event.origin.wireName + " role=" + event.socketRole.wireName + " account=" + account + " phase=" + phase + " endpoint=" + endpointKey + " activation_generation=" + event.activationGeneration + " delay_ms=" + (now - startedAtMs));
         clearPendingDnsVisiblePhase(endpointKey, now);
-        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, phase, endpointKey, ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName);
-        AccountInstance.getInstance(account).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, phase, endpointKey, ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName);
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyConnectionStageChanged, phase, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, "visible_delayed_dns", 0);
+        AccountInstance.getInstance(account).getNotificationCenter().postNotificationName(NotificationCenter.proxyConnectionStageChanged, phase, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, "visible_delayed_dns", 0);
     }
 
     private static boolean isMtProxy(SharedConfig.ProxyInfo proxyInfo) {

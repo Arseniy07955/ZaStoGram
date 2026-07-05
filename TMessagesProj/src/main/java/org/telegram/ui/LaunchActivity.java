@@ -7050,6 +7050,9 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
         ConnectionsManager.getInstance(currentAccount).setAppPaused(false, false);
         updateCurrentConnectionState(currentAccount);
+        if (passcodeDialog == null || passcodeDialog.passcodeView.getVisibility() != View.VISIBLE) {
+            AndroidUtilities.showClipboardProxyAlertIfNeeded(this);
+        }
         if (PhotoViewer.hasInstance() && PhotoViewer.getInstance().isVisible()) {
             PhotoViewer.getInstance().onResume();
         }

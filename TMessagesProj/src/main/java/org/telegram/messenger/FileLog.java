@@ -375,7 +375,7 @@ public class FileLog {
             }
             instance.lastLogRotation = now;
         }
-        instance.logQueue.postRunnable(instance::rotateLogInternal);
+        instance.logQueue.postRunnable(() -> instance.rotateLogInternal(force));
     }
 
     public static File getCurrentLogFile() {
@@ -448,7 +448,7 @@ public class FileLog {
     }
 
     // Выполняется строго на logQueue, поэтому не конфликтует с записью строк лога.
-    private void rotateLogInternal() {
+    private void rotateLogInternal(boolean diagnosticSession) {
         try {
             File dir = AndroidUtilities.getLogsDir();
             if (dir == null) {
@@ -473,6 +473,9 @@ public class FileLog {
             currentFile.createNewFile();
             streamWriter = new OutputStreamWriter(new FileOutputStream(currentFile));
             streamWriter.write("-----start log " + date + "-----\n");
+            if (diagnosticSession) {
+                streamWriter.write(dateFormat.format(System.currentTimeMillis()) + " D proxy_diagnostic_session event=start reason=forced_log_rotation file=" + currentFile.getName() + "\n");
+            }
             streamWriter.flush();
             tlStreamWriter = new OutputStreamWriter(new FileOutputStream(tlRequestsFile));
             tlStreamWriter.write("-----start log " + date + "-----\n");

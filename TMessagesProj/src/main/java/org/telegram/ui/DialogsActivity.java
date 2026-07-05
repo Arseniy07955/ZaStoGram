@@ -10017,12 +10017,14 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
         final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
-        final boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
         String proxyStatusText = proxyEnabled
                 ? ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, true, currentConnectionState)
                 : getString(R.string.MenuProxyDisabled);
+        boolean proxyConnected = ProxyCheckDiagnostics.isProxyShieldConnected(SharedConfig.currentProxy, proxyEnabled, currentConnectionState);
+        int proxyAlertLevel = ProxyCheckDiagnostics.proxyShieldAlertLevel(SharedConfig.currentProxy, proxyEnabled, currentConnectionState);
+        int proxyAlertColor = getThemedColor(ProxyCheckDiagnostics.proxyShieldAlertColorKey(SharedConfig.currentProxy, proxyEnabled, currentConnectionState));
         proxyMenuSubItem.setSubtext(proxyStatusText);
-        proxyDrawable.setConnected(proxyEnabled, connected, animated);
+        proxyDrawable.setStatus(proxyEnabled, proxyConnected, proxyAlertLevel, proxyAlertColor, animated);
     }
 
     private AnimatorSet doneItemAnimator;

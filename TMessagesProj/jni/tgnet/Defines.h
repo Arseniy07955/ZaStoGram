@@ -146,7 +146,7 @@ typedef struct ConnectiosManagerDelegate {
     virtual void onUpdate(int32_t instanceNum) = 0;
     virtual void onSessionCreated(int32_t instanceNum) = 0;
     virtual void onConnectionStateChanged(ConnectionState state, int32_t instanceNum) = 0;
-    virtual void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, int32_t activationGeneration, int32_t suggestedReconnectHoldMs) = 0;
+    virtual void onProxyConnectionStageChanged(int32_t instanceNum, std::string diagnostic, std::string endpointKey, std::string probeKey, std::string origin, std::string socketRole, int32_t activationGeneration, int32_t suggestedReconnectHoldMs) = 0;
     virtual void onUnparsedMessageReceived(int64_t reqMessageId, NativeByteBuffer *buffer, ConnectionType connectionType, int32_t instanceNum) = 0;
     virtual void onLogout(int32_t instanceNum) = 0;
     virtual void onUpdateConfig(TL_config *config, int32_t instanceNum) = 0;

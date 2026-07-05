@@ -61,6 +61,7 @@ protected:
     bool hasTlsHashMismatch();
     void publishProxyConnectionStage(const char *diagnostic);
     virtual std::string proxyConnectionStageOrigin();
+    virtual std::string proxyConnectionStageSocketRole();
     void markMtProxyFirstPlainDataSent(uint32_t bytes);
     void markMtProxyFirstPlainDataReceived(uint32_t bytes);
     virtual void onReceivedData(NativeByteBuffer *buffer) = 0;
@@ -85,6 +86,7 @@ private:
     bool wssUsedRelayFallback = false;
     bool suppressNextProxyCloseDiagnostic = false;
     uint32_t proxyActivationGeneration = 0;
+    uint32_t proxyConfigGeneration = 0;
     uint32_t proxySuggestedReconnectHoldMs = 0;
     std::string proxyActivationOrigin = "active_socket";
 

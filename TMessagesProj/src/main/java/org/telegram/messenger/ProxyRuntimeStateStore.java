@@ -10,9 +10,12 @@ import java.util.Locale;
 public final class ProxyRuntimeStateStore {
     private static final long DNS_OUTAGE_WINDOW_MS = 60 * 1000L;
     private static final long DNS_PREVIOUS_FAILURE_WINDOW_MS = 60 * 1000L;
+    private static final long RESUME_GRACE_MS = 8 * 1000L;
     private static final HashMap<String, DnsOutageState> dnsOutageStates = new HashMap<>();
     private static final int[] proxyActivationGenerationFloor = new int[UserConfig.MAX_ACCOUNT_COUNT];
+    private static int visibleActivationGenerationFloor;
     private static int proxyActivationGeneration;
+    private static long lastForegroundResumeElapsedMs;
 
     private ProxyRuntimeStateStore() {
     }
@@ -54,24 +57,101 @@ public final class ProxyRuntimeStateStore {
             } else if (account >= 0 && account < proxyActivationGenerationFloor.length) {
                 proxyActivationGenerationFloor[account] = proxyActivationGeneration;
             }
+            if (ProxyConnectionEvent.isVisibleOwnerOrigin(origin)) {
+                visibleActivationGenerationFloor = proxyActivationGeneration;
+            }
             String originName = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET.wireName : origin.wireName;
-            logControl("decision=activation_generation origin=" + originName + " account=" + account + " all_accounts=" + (allAccounts ? 1 : 0) + " generation=" + proxyActivationGeneration);
+            logControl("owner=ProxyRuntimeStateStore.noteProxyActivation decision=activation_generation origin=" + originName + " account=" + account + " all_accounts=" + (allAccounts ? 1 : 0) + " generation=" + proxyActivationGeneration + " visible_floor=" + visibleActivationGenerationFloor);
             return proxyActivationGeneration;
         }
     }
 
     static boolean shouldIgnoreStaleActivationGeneration(ProxyConnectionEvent event) {
         if (event == null
-                || !ProxyConnectionEvent.isActiveProxyOrigin(event.origin)
+                || !ProxyConnectionEvent.isHealthOrigin(event.origin)
                 || event.account < 0
                 || event.account >= proxyActivationGenerationFloor.length) {
             return false;
         }
         int floor;
+        int visibleFloor;
         synchronized (ProxyRuntimeStateStore.class) {
             floor = proxyActivationGenerationFloor[event.account];
+            visibleFloor = visibleActivationGenerationFloor;
+        }
+        if (visibleFloor > 0
+                && !ProxyConnectionEvent.canDriveVisible(event)
+                && event.activationGeneration > 0
+                && event.activationGeneration < visibleFloor) {
+            return true;
         }
         return floor > 0 && event.activationGeneration != floor;
+    }
+
+    static int currentActivationGenerationForEvent(int account, ProxyConnectionEvent.Origin origin) {
+        ProxyConnectionEvent.Origin safeOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin;
+        synchronized (ProxyRuntimeStateStore.class) {
+            if (account >= 0 && account < proxyActivationGenerationFloor.length && proxyActivationGenerationFloor[account] > 0) {
+                return proxyActivationGenerationFloor[account];
+            }
+            if (ProxyConnectionEvent.isVisibleOwnerOrigin(safeOrigin) && visibleActivationGenerationFloor > 0) {
+                return visibleActivationGenerationFloor;
+            }
+            return Math.max(0, proxyActivationGeneration);
+        }
+    }
+
+    public static void noteResumeForeground() {
+        synchronized (ProxyRuntimeStateStore.class) {
+            lastForegroundResumeElapsedMs = SystemClock.elapsedRealtime();
+        }
+        logControl("owner=ProxyRuntimeStateStore.noteResumeForeground decision=resume_foreground grace_ms=" + RESUME_GRACE_MS);
+    }
+
+    static boolean isResumeGrace(long now) {
+        long lastResume;
+        synchronized (ProxyRuntimeStateStore.class) {
+            lastResume = lastForegroundResumeElapsedMs;
+        }
+        return lastResume > 0 && now - lastResume >= 0 && now - lastResume <= RESUME_GRACE_MS;
+    }
+
+    static boolean shouldShowResumeRestoringStatus(SharedConfig.ProxyInfo proxyInfo, long now) {
+        if (proxyInfo == null || now <= 0) {
+            return false;
+        }
+        long lastResume;
+        synchronized (ProxyRuntimeStateStore.class) {
+            lastResume = lastForegroundResumeElapsedMs;
+        }
+        if (lastResume <= 0 || now < lastResume) {
+            return false;
+        }
+        String diagnostic = ProxyCheckDiagnostics.normalize(proxyInfo.lastCheckDiagnostic);
+        if (ProxyPhasePolicy.isProxyUsableSuccessPhase(diagnostic)
+                || ProxyCheckDiagnostics.OK.equals(diagnostic)) {
+            return false;
+        }
+        boolean freshUnresolvedPhase = ProxyCheckDiagnostics.hasFreshFailure(proxyInfo)
+                || ProxyCheckDiagnostics.hasFreshUnresolvedLivePhase(proxyInfo)
+                || ProxyCheckDiagnostics.hasFreshEndpointCooldown(proxyInfo);
+        if (!freshUnresolvedPhase) {
+            return false;
+        }
+        if (isUserInitiatedVisibleDiagnostic(proxyInfo) && proxyInfo.lastCheckDiagnosticTime >= lastResume) {
+            return false;
+        }
+        long graceDeadline = lastResume + RESUME_GRACE_MS;
+        return now <= graceDeadline
+                || (proxyInfo.lastCheckDiagnosticTime > 0 && proxyInfo.lastCheckDiagnosticTime <= graceDeadline);
+    }
+
+    private static boolean isUserInitiatedVisibleDiagnostic(SharedConfig.ProxyInfo proxyInfo) {
+        if (proxyInfo == null || proxyInfo.lastCheckOrigin == null) {
+            return false;
+        }
+        return ProxyConnectionEvent.Origin.USER_SELECT.wireName.equals(proxyInfo.lastCheckOrigin)
+                || ProxyConnectionEvent.Origin.SETTINGS_CHANGE.wireName.equals(proxyInfo.lastCheckOrigin);
     }
 
     static Decision quarantineAndCancelEndpoint(SharedConfig.ProxyInfo proxyInfo, String phase, String endpointKey, String probeKey, long now, String source, ProxyConnectionEvent.Origin origin, int account, boolean visibleChanged) {
@@ -143,6 +223,14 @@ public final class ProxyRuntimeStateStore {
         return ProxyHealthStore.usableSuccessRemainingMs(proxyInfo, SystemClock.elapsedRealtime());
     }
 
+    public static long lastUsableSuccessAgeMs(SharedConfig.ProxyInfo proxyInfo) {
+        return lastUsableSuccessAgeMs(proxyInfo, SystemClock.elapsedRealtime());
+    }
+
+    public static long lastUsableSuccessAgeMs(SharedConfig.ProxyInfo proxyInfo, long now) {
+        return ProxyHealthStore.lastUsableSuccessAgeMs(proxyInfo, now);
+    }
+
     public static boolean isMtProxyStartupFanoutLimited(int account) {
         return ProxyWarmupGate.isMtProxyStartupFanoutLimited(account);
     }
@@ -170,7 +258,8 @@ public final class ProxyRuntimeStateStore {
         if (proxyInfo == null) {
             return;
         }
-        onRuntimeEvent(ProxyConnectionEvent.connected(UserConfig.selectedAccount, proxyInfo, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, 0, SystemClock.elapsedRealtime()));
+        int activationGeneration = currentActivationGenerationForEvent(UserConfig.selectedAccount, ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
+        onRuntimeEvent(ProxyConnectionEvent.connected(UserConfig.selectedAccount, proxyInfo, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, activationGeneration, SystemClock.elapsedRealtime()));
     }
 
     public static void markConnectionStarting(SharedConfig.ProxyInfo proxyInfo) {
@@ -182,7 +271,8 @@ public final class ProxyRuntimeStateStore {
             return;
         }
         ProxyConnectionEvent.Origin safeOrigin = origin == null ? ProxyConnectionEvent.Origin.ACTIVE_SOCKET : origin;
-        onRuntimeEvent(ProxyConnectionEvent.connectStart(UserConfig.selectedAccount, proxyInfo, safeOrigin, 0, SystemClock.elapsedRealtime()));
+        int activationGeneration = currentActivationGenerationForEvent(UserConfig.selectedAccount, safeOrigin);
+        onRuntimeEvent(ProxyConnectionEvent.connectStart(UserConfig.selectedAccount, proxyInfo, safeOrigin, activationGeneration, SystemClock.elapsedRealtime()));
     }
 
     public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
@@ -190,7 +280,7 @@ public final class ProxyRuntimeStateStore {
     }
 
     public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now) {
-        markConnectionUsable(proxyInfo, diagnostic, now, 0);
+        markConnectionUsable(proxyInfo, diagnostic, now, currentActivationGenerationForEvent(UserConfig.selectedAccount, ProxyConnectionEvent.Origin.ACTIVE_SOCKET));
     }
 
     public static void markConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration) {
@@ -198,7 +288,10 @@ public final class ProxyRuntimeStateStore {
             return;
         }
         String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
-        onRuntimeEvent(ProxyConnectionEvent.usableSuccess(UserConfig.selectedAccount, proxyInfo, normalized, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, activationGeneration, now));
+        int eventGeneration = activationGeneration > 0
+                ? activationGeneration
+                : currentActivationGenerationForEvent(UserConfig.selectedAccount, ProxyConnectionEvent.Origin.ACTIVE_SOCKET);
+        onRuntimeEvent(ProxyConnectionEvent.usableSuccess(UserConfig.selectedAccount, proxyInfo, normalized, ProxyConnectionEvent.Origin.ACTIVE_SOCKET, eventGeneration, now));
     }
 
     static boolean applyConnectionUsable(SharedConfig.ProxyInfo proxyInfo, String diagnostic, long now, int activationGeneration) {
@@ -212,54 +305,6 @@ public final class ProxyRuntimeStateStore {
         ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now);
         ProxyWarmupGate.onProxyUsable(ProxyEndpointKey.liveStage(proxyInfo), now);
         return true;
-    }
-
-    public static ProxyHealthStore.EndpointFailureResult markEndpointFailure(SharedConfig.ProxyInfo proxyInfo, String diagnostic) {
-        if (proxyInfo == null) {
-            return ProxyHealthStore.EndpointFailureResult.noop(diagnostic);
-        }
-        long now = SystemClock.elapsedRealtime();
-        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
-        if (shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(proxyInfo, normalized, now)) {
-            logControl("decision=telemetry_only reason=previous_dns_outage source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " host=" + dnsHost(proxyInfo) + " failures=" + dnsOutageFailures(proxyInfo, now));
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        if (!ProxyPhasePolicy.canBackoff(diagnostic)) {
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        ProxyVisibleStateStore.clearPendingDnsVisiblePhase(ProxyEndpointKey.liveStage(proxyInfo), now);
-        if (ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)) {
-            logControl("decision=ignored_rotated_away source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo));
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        if (ProxyHealthStore.hasFreshUsableSuccess(proxyInfo, now)) {
-            logControl("decision=held_by_usable_success source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + ProxyVisibleStateStore.heldByUsablePhase(proxyInfo, now));
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        if (isCurrentProxyUsable(proxyInfo, now)) {
-            logControl("decision=held_by_current_proxy_usable source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " held_by=" + ProxyVisibleStateStore.heldByCurrentProxyPhase(proxyInfo, now));
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        rememberDnsResolveFailurePhase(proxyInfo, normalized, now);
-        if (shouldHoldHostResolveFailureByDnsOutage(proxyInfo, normalized, now)) {
-            logControl("decision=dns_outage_hold source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " host=" + dnsHost(proxyInfo) + " failures=" + dnsOutageFailures(proxyInfo, now));
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        if (ProxyPhasePolicy.terminalExactConfig(normalized)) {
-            ProxyWarmupGate.onProxyFailure(ProxyEndpointKey.liveStage(proxyInfo), normalized, now);
-            quarantineAndCancelEndpoint(proxyInfo, normalized, ProxyEndpointKey.liveStage(proxyInfo), "", now, "live_failure", ProxyConnectionEvent.Origin.ACTIVE_SOCKET, UserConfig.selectedAccount, false);
-            return ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        }
-        if (ProxyPhasePolicy.isPunitiveFailure(normalized)) {
-            ProxyWarmupGate.onProxyFailure(ProxyEndpointKey.liveStage(proxyInfo), normalized, now);
-        }
-        ProxyHealthStore.EndpointFailureResult failure = ProxyHealthStore.rememberLiveFailure(proxyInfo, normalized, now);
-        if (ProxyPhasePolicy.canRotate(normalized) && failure.rotationAllowed) {
-            quarantineAndCancelEndpoint(proxyInfo, normalized, ProxyEndpointKey.liveStage(proxyInfo), "", now, "live_failure", ProxyConnectionEvent.Origin.ACTIVE_SOCKET, UserConfig.selectedAccount, false);
-        } else if (ProxyPhasePolicy.canRotate(normalized)) {
-            logControl("decision=held_by_failure_hysteresis source=live_failure phase=" + normalized + " endpoint=" + ProxyEndpointKey.liveStage(proxyInfo) + " failures=" + failure.rotationFailures);
-        }
-        return failure;
     }
 
     public static void markEndpointCooldown(SharedConfig.ProxyInfo proxyInfo, long now) {
@@ -383,63 +428,6 @@ public final class ProxyRuntimeStateStore {
                 && !ProxyCheckDiagnostics.hasFreshUnresolvedLivePhase(info)
                 && !ProxyHealthStore.isEndpointRotatedAway(info, SystemClock.elapsedRealtime())
                 && !isEndpointBackedOff(info);
-    }
-
-    public static boolean shouldScheduleFallback(int account, String diagnostic, String endpointKey) {
-        SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
-        String normalized = ProxyCheckDiagnostics.normalize(diagnostic);
-        long now = SystemClock.elapsedRealtime();
-        boolean candidate = account == UserConfig.selectedAccount
-                && currentProxy != null
-                && ProxyEndpointKey.matchesLiveStage(currentProxy, endpointKey)
-                && !isCurrentProxyUsable(currentProxy, now);
-        if (candidate && shouldKeepConnectionNotStartedTelemetryOnlyByDnsOutage(currentProxy, normalized, now)) {
-            logRotation("decision=telemetry_only reason=previous_dns_outage phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
-            logControl("decision=telemetry_only reason=previous_dns_outage phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
-            return false;
-        }
-        if (!ProxyPhasePolicy.isPunitiveFailure(normalized)) {
-            logRotation("decision=ignored_non_punitive phase=" + normalized + " endpoint=" + endpointKey);
-            return false;
-        }
-        if (currentProxy != null && ProxyEndpointKey.matchesLiveStage(currentProxy, endpointKey) && isCurrentProxyUsable(currentProxy, now)) {
-            if (ProxyHealthStore.hasFreshUsableSuccess(currentProxy, now)) {
-                logRotation("decision=held_by_usable_success phase=" + normalized + " endpoint=" + endpointKey + " held_by=" + ProxyVisibleStateStore.heldByUsablePhase(currentProxy, now));
-            } else {
-                logRotation("decision=held_by_current_proxy_usable phase=" + normalized + " endpoint=" + endpointKey + " held_by=" + ProxyVisibleStateStore.heldByCurrentProxyPhase(currentProxy, now));
-            }
-            return false;
-        }
-        if (candidate && shouldHoldHostResolveFailureByDnsOutage(currentProxy, normalized, now)) {
-            logRotation("decision=dns_outage_hold phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
-            logControl("decision=dns_outage_hold phase=" + normalized + " endpoint=" + endpointKey + " host=" + dnsHost(currentProxy) + " failures=" + dnsOutageFailures(currentProxy, now));
-            return false;
-        }
-        if (ProxyPhasePolicy.terminalExactConfig(normalized)) {
-            if (candidate) {
-                quarantineAndCancelEndpoint(currentProxy, normalized, endpointKey, "", now, "fallback", ProxyConnectionEvent.Origin.ACTIVE_SOCKET, account, false);
-                logRotation("decision=trigger_terminal_exact phase=" + normalized + " endpoint=" + endpointKey);
-                return true;
-            }
-            logRotation("decision=fallback_not_scheduled_terminal_exact phase=" + normalized + " endpoint=" + endpointKey);
-            logControl("decision=fallback_not_scheduled_terminal_exact phase=" + normalized + " endpoint=" + endpointKey);
-            return false;
-        }
-        ProxyHealthStore.EndpointFailureResult failure = candidate
-                ? ProxyHealthStore.lastFailureResult(currentProxy, normalized, now)
-                : ProxyHealthStore.EndpointFailureResult.noop(normalized);
-        boolean result = candidate && failure.rotationAllowed;
-        if (result) {
-            quarantineAndCancelEndpoint(currentProxy, normalized, endpointKey, "", now, "fallback", ProxyConnectionEvent.Origin.ACTIVE_SOCKET, account, false);
-            logRotation("decision=trigger phase=" + normalized + " endpoint=" + endpointKey + " count=" + failure.rotationFailures + " required=" + ProxyHealthStore.punitiveFailuresToRotate());
-        } else if (candidate) {
-            logRotation("decision=waiting_hysteresis phase=" + normalized + " endpoint=" + endpointKey + " count=" + failure.rotationFailures + " required=" + ProxyHealthStore.punitiveFailuresToRotate());
-            logControl("decision=held_by_failure_hysteresis phase=" + normalized + " endpoint=" + endpointKey + " failures=" + failure.rotationFailures);
-        } else {
-            logRotation("decision=fallback_not_scheduled phase=" + normalized + " endpoint=" + endpointKey);
-            logControl("decision=fallback_not_scheduled phase=" + normalized + " endpoint=" + endpointKey + " failures=" + failure.rotationFailures);
-        }
-        return result;
     }
 
     public static boolean hasFreshConcreteProxyPhase(SharedConfig.ProxyInfo proxyInfo) {
@@ -673,12 +661,12 @@ public final class ProxyRuntimeStateStore {
             }
             lastControlMessage = message;
         }
-        FileLog.d("proxy_control " + message);
+        FileLog.d("proxy_control " + (message.contains("owner=") ? message : "owner=ProxyRuntimeStateStore " + message));
     }
 
     static void logRotation(String message) {
         if (BuildVars.LOGS_ENABLED) {
-            FileLog.d("proxy_rotation " + message);
+            FileLog.d("proxy_rotation " + (message.contains("owner=") ? message : "owner=ProxyRuntimeStateStore " + message));
         }
     }
 

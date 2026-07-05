@@ -221,7 +221,7 @@ def main() -> None:
     require(
         "boolean selectedAccountStage = event.account == UserConfig.selectedAccount;" in reducer_text
         and "boolean stageTargetsCurrentProxy = currentProxy != null && concretePhase && ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey);" in reducer_text
-        and "if (selectedAccountStage && verdict.canOverwriteVisible)" in reducer_text,
+        and "if (selectedAccountStage && visibleOwner && verdict.canOverwriteVisible)" in reducer_text,
         "native proxy live stages from background accounts must not overwrite the shared visible proxy diagnostic",
     )
     stage_callback = reducer_text[
@@ -229,7 +229,7 @@ def main() -> None:
         reducer_text.find("private static boolean isActiveProxyEvent", reducer_text.find("static ProxyRuntimeStateStore.Decision reduce"))
     ]
     mark_failure_idx = stage_callback.find("rememberLiveFailure(currentProxy, event.phase, event.timestamp, event.suggestedHoldMs);")
-    selected_ui_idx = stage_callback.find("if (selectedAccountStage && verdict.canOverwriteVisible)")
+    selected_ui_idx = stage_callback.find("if (selectedAccountStage && visibleOwner && verdict.canOverwriteVisible)")
     require(
         mark_failure_idx >= 0
         and selected_ui_idx >= 0
@@ -238,7 +238,7 @@ def main() -> None:
     )
     require(
         "final String endpointKey" in text("connections_java")
-        and "ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, activationGeneration, suggestedHoldMs" in text("connections_java")
+        and "ProxyConnectionEvent.nativeStage(currentAccount, diagnostic, endpointKey, probeKey, origin, socketRole, activationGeneration, suggestedHoldMs" in text("connections_java")
         and "ProxyEndpointKey.matchesLiveStage(currentProxy, event.endpointKey)" in reducer_text,
         "native proxy live stages from stale endpoint/secret keys must not overwrite the currently selected proxy diagnostic",
     )
@@ -256,8 +256,9 @@ def main() -> None:
         "onProxyConnectionStageChanged" in text("defines")
         and "probeKey" in text("defines")
         and "activationGeneration" in text("defines")
+        and "socketRole" in text("defines")
         and "jclass_ConnectionsManager_onProxyConnectionStageChanged" in text("wrapper")
-        and 'GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V")' in text("wrapper"),
+        and 'GetStaticMethodID(jclass_ConnectionsManager, "onProxyConnectionStageChanged", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V")' in text("wrapper"),
         "JNI bridge must forward native proxy live stages with endpoint and probe keys to ConnectionsManager",
     )
     require(
@@ -288,21 +289,14 @@ def main() -> None:
         and "decodedSecretForLiveStage" in text("endpoint_key")
         and "if (args == null || args.length < 2 || !(args[1] instanceof String))" in text("proxy_list")
         and "ProxyCheckScheduler.matchesEndpointStageKey(selectedProxy, endpointKey)" in text("proxy_list")
-        and (
-            "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, (String) args[1])" in text("rotation")
-            or (
-                "String endpointKey = (String) args[1];" in text("rotation")
-                and (
-                    "ProxyRuntimeStateStore.shouldScheduleFallback(account, diagnostic, endpointKey)" in text("rotation")
-                    or "ProxyRuntimeStateStore.shouldScheduleFallback(account, event.phase, endpointKey)" in text("rotation")
-                )
-            )
-        )
+        and "String endpointKey = (String) args[1];" in text("rotation")
+        and "reducerDecision" in text("rotation")
+        and "rotationTrigger" in text("rotation")
         and "decision=ignored_stale_endpoint" in text("reducer"),
         "UI and Java lifecycle code must ignore proxy live stages from stale endpoint/secret keys",
     )
     require(
-        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration)" in text("connections_java"),
+        "postNotificationName(NotificationCenter.proxyConnectionStageChanged, normalizedDiagnostic, endpointKey, event.origin.wireName, event.activationGeneration, event.socketRole.wireName, decision.decision, decision.rotationTrigger ? 1 : 0)" in text("connections_java"),
         "proxy live stage notifications must carry endpoint key and origin so UI/rotation can isolate stale or non-active events",
     )
     require(

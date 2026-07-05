@@ -49,10 +49,11 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
 
     @Override
     public void checkUpdate(boolean force, Runnable whenDone) {
-        String url = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json";
-        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates and proxies at " + url);
+        String url = "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/update.json?t=" + System.currentTimeMillis();
+        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: checking for updates at " + url);
         new HttpGetTask(result -> {
             if (result != null) {
+                if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update json received: " + result);
                 try {
                     JSONObject json = new JSONObject(result);
                     
@@ -60,21 +61,23 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
                     int versionCode = json.getInt("version_code");
                     String versionName = json.getString("version_name");
                     String changelog = json.optString("changelog", "");
-                    // Absolute normalization to 4-digit base version
+
+                    // Robust normalization: bring both to base version (e.g. 6920)
                     int latest = versionCode;
                     while (latest >= 10000) latest /= 10;
                     int current = BuildConfig.VERSION_CODE;
                     while (current >= 10000) current /= 10;
 
+                    if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: version comparison - latest base: " + latest + ", current base: " + current + ", full latest: " + versionCode + ", full current: " + BuildConfig.VERSION_CODE);
+
                     if (latest > current) {
                         pendingUpdate = new BetaUpdate(versionName, latest, changelog);
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: update available: " + versionName + " (base " + latest + " > " + current + ")");
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: new update available: " + versionName);
                     } else {
                         pendingUpdate = null;
-                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: up to date (base " + current + ", latest base " + latest + ")");
+                        if (BuildVars.LOGS_ENABLED) FileLog.d("telegaNEW: app is up to date");
                     }
-
-                    // 2. Process Dynamic Proxies
+                    // ... (rest of proxy logic)
                     if (json.has("proxies")) {
                         JSONArray proxies = json.getJSONArray("proxies");
                         boolean listChanged = false;

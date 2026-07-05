@@ -223,16 +223,19 @@ def main() -> int:
         failures,
     )
     # Defect B: a proxy that returned ZERO bytes after ClientHello is silent/unreachable,
-    # not incompatible. The recipe ladder and the FakeTLS terminal budget must not advance
-    # on it; endpoint cooldown paces the retry with the same recipe. Recipe progression is
-    # reserved for failures with actual response bytes.
+    # not incompatible. It must still count toward the FakeTLS terminal budget so repeated
+    # ClientHello attempts stop, while recipe cursor advancement stays separate and can be
+    # held for no-bytes failures.
     require(
         "context.responseBytes = bytesRead" in socket
         and "bool silentAfterClientHello = context.responseBytes == 0" in recorder_failure
         and "evidenceKind == MtProxyFailureEvidenceKind::NoBytesAfterClientHello" in recorder_failure
-        and "&& !silentAfterClientHello" in recorder_failure
+        and "bool budgetEligible = context.fakeTls" in recorder_failure
+        and "MtProxyProbeCoordinator::failureCountsTowardHandshakeBudget(phase, context.responseSignature)" in recorder_failure
+        and "bool recipeAdvanceAllowed = !silentAfterClientHello" in recorder_failure
+        and "MtProxyProbeCoordinator::completeFailure(" in recorder_failure
         and "silent_after_client_hello" in recorder_failure,
-        "zero-bytes-after-ClientHello failures must hold the recipe ladder instead of advancing it",
+        "zero-bytes-after-ClientHello failures must count toward terminal budget while recipe advancement remains separately gated",
         failures,
     )
     recipe_body = block(probe_coordinator, "bool MtProxyProbeCoordinator::failureNeedsRecipe", "MtProxyAdaptivePolicy::RecipeCursor MtProxyProbeCoordinator::recipeCursorForProbe")
@@ -500,8 +503,8 @@ def main() -> int:
     )
     require(
         "ProxyHealthStore.isEndpointRotatedAway(proxyInfo, now)" in block(visible_store, "static boolean markConnectionUsable", "private static void promotePendingDnsVisiblePhase")
-        and "if (!ProxyVisibleStateStore.markConnectionUsable(proxyInfo, normalized, now, activationGeneration))" in block(runtime_store, "public static void markConnectionUsable", "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
-        and "ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now)" in block(runtime_store, "public static void markConnectionUsable", "public static ProxyHealthStore.EndpointFailureResult markEndpointFailure")
+        and "if (!ProxyVisibleStateStore.markConnectionUsable(proxyInfo, normalized, now, activationGeneration))" in block(runtime_store, "public static void markConnectionUsable", "public static void markEndpointCooldown")
+        and "ProxyHealthStore.clearEndpointBackoff(proxyInfo, normalized, now)" in block(runtime_store, "public static void markConnectionUsable", "public static void markEndpointCooldown")
         and "source=usable_success" in visible_store,
         "late usable-success callbacks from a rotated-away endpoint must not clear quarantine/backoff",
         failures,

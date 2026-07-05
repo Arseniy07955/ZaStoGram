@@ -1,11 +1,16 @@
 """client_utils — fragments, accounts, controllers, queues and message sending for plugins."""
 
-from java import dynamic_proxy
-from java.lang import Runnable
+from java import dynamic_proxy, jclass
 
-from org.telegram.messenger import AccountInstance, SendMessagesHelper
+from extera_utils.text_formatting import parse_text
+
+from org.telegram.messenger import AccountInstance, MediaController, SendMessagesHelper
 from org.telegram.plugins import PluginUtils
 from org.telegram.tgnet import RequestDelegate
+
+
+Runnable = jclass("java.lang.Runnable")
+NotificationCenterDelegateInterface = jclass("org.telegram.messenger.NotificationCenter$NotificationCenterDelegate")
 
 
 def get_last_fragment():
@@ -63,6 +68,14 @@ def get_notifications_controller(account=None):
 
 def get_notification_center(account=None):
     return get_account_instance(account).getNotificationCenter()
+
+
+def get_notifications_settings(account=None):
+    return get_account_instance(account).getNotificationsSettings()
+
+
+def get_media_controller():
+    return MediaController.getInstance()
 
 
 def get_location_controller(account=None):
@@ -125,6 +138,15 @@ def get_user_config():
 
 # ---------------------------------------------------------------- threading
 
+STAGE_QUEUE = "stageQueue"
+GLOBAL_QUEUE = "globalQueue"
+CACHE_CLEAR_QUEUE = "cacheClearQueue"
+SEARCH_QUEUE = "searchQueue"
+PHONE_BOOK_QUEUE = "phoneBookQueue"
+THEME_QUEUE = "themeQueue"
+EXTERNAL_NETWORK_QUEUE = "externalNetworkQueue"
+PLUGINS_QUEUE = "pluginsQueue"
+
 class _Runnable(dynamic_proxy(Runnable)):
     def __init__(self, fn):
         super().__init__()
@@ -138,10 +160,24 @@ class _Runnable(dynamic_proxy(Runnable)):
             log(e)
 
 
-def run_on_queue(fn):
-    """Run fn on a background worker queue (off the UI thread)."""
+def get_queue_by_name(name):
+    """Return the raw Java DispatchQueue for a known exteraGram queue name."""
+    if name is None:
+        return None
+    return PluginUtils.getQueueByName(str(name))
+
+
+def run_on_queue(fn, queue=PLUGINS_QUEUE, delay=0):
+    """Run fn on a background worker queue, optionally after `delay` milliseconds."""
     if fn is not None:
-        PluginUtils.runOnQueue(_Runnable(fn))
+        if isinstance(queue, (int, float)) and delay == 0:
+            delay = queue
+            queue = PLUGINS_QUEUE
+        try:
+            delay = int(delay or 0)
+        except Exception:
+            delay = 0
+        PluginUtils.runOnQueue(str(queue or PLUGINS_QUEUE), _Runnable(fn), int(delay))
 
 
 def run_on_ui_thread(fn, delay=0):
@@ -152,11 +188,49 @@ def run_on_ui_thread(fn, delay=0):
 
 # ---------------------------------------------------------------- sending
 
-def send_document(dialog_id, file_path, caption="", replyToMsg=None, replyToTopMsg=None, replyQuote=None):
+def _kwarg(kwargs, camel_name, snake_name, default=None):
+    if camel_name in kwargs:
+        return kwargs[camel_name]
+    return kwargs.get(snake_name, default)
+
+
+def send_document(dialog_id, file_path, caption="", replyToMsg=None, replyToTopMsg=None, replyQuote=None, **kwargs):
     """Send a local file as a document to a dialog. Reply/quote args are optional."""
+    replyToMsg = _kwarg(kwargs, "replyToMsg", "reply_to_msg", replyToMsg)
+    replyToTopMsg = _kwarg(kwargs, "replyToTopMsg", "reply_to_top_msg", replyToTopMsg)
+    replyQuote = _kwarg(kwargs, "replyQuote", "reply_quote", replyQuote)
+    caption_entities = _kwarg(kwargs, "captionEntities", "caption_entities", kwargs.get("entities"))
+    parse_mode = kwargs.get("parse_mode")
+    if parse_mode and caption is not None:
+        parsed_caption = parse_text(caption, parse_mode, is_caption=True)
+        caption = parsed_caption.get("caption", caption)
+        caption_entities = parsed_caption.get("entities", caption_entities)
     PluginUtils.sendDocument(
         int(dialog_id), str(file_path), caption if caption is not None else "",
-        replyToMsg, replyToTopMsg, replyQuote)
+        caption_entities, replyToMsg, replyToTopMsg, replyQuote)
+
+
+def send_text(peer_id, text, parse_mode=None, **kwargs):
+    """Send a text message using exteraGram-style positional arguments."""
+    params = dict(kwargs)
+    params["peer"] = peer_id
+    params["message"] = text
+    return send_message(params, parse_mode=parse_mode)
+
+
+def send_audio(peer_id, audio_path, caption="", **kwargs):
+    """Send a local audio file; currently dispatched through Telegram's document sender."""
+    return send_document(peer_id, audio_path, caption, **kwargs)
+
+
+def send_photo(peer_id, photo_path, caption="", **kwargs):
+    """Send a local photo file; currently dispatched through Telegram's document sender."""
+    return send_document(peer_id, photo_path, caption, **kwargs)
+
+
+def send_video(peer_id, video_path, caption="", **kwargs):
+    """Send a local video file; currently dispatched through Telegram's document sender."""
+    return send_document(peer_id, video_path, caption, **kwargs)
 
 
 # dict-key -> public SendMessageParams field name (only where they differ)
@@ -175,7 +249,7 @@ _SEND_ALIASES = {
 # dict keys consumed for routing (peer/text/account) — never set as fields
 _SEND_SKIP_KEYS = {
     "peer", "dialog_id", "dialogId", "chat_id", "chatId",
-    "user_id", "userId", "to", "message", "text", "account",
+    "user_id", "userId", "to", "message", "text", "account", "parse_mode",
 }
 
 
@@ -188,7 +262,30 @@ def _set_param_field(obj, name, value):
         log("send_message: cannot set field '%s'" % name)
 
 
-def send_message(params, account=None):
+def _apply_parse_mode(params, parse_mode):
+    effective_parse_mode = parse_mode if parse_mode is not None else params.get("parse_mode")
+    if not effective_parse_mode:
+        return params
+
+    is_caption = "caption" in params and params.get("message") is None and params.get("text") is None
+    source_key = "caption" if is_caption else ("message" if "message" in params else "text")
+    if source_key not in params or params.get(source_key) is None:
+        return params
+
+    parsed = parse_text(params.get(source_key), effective_parse_mode, is_caption=is_caption)
+    params = dict(params)
+    if is_caption:
+        params["caption"] = parsed.get("caption", params.get(source_key))
+    else:
+        params["message"] = parsed.get("message", params.get(source_key))
+        params.pop("text", None)
+    entities = parsed.get("entities")
+    if entities:
+        params["entities"] = entities
+    return params
+
+
+def send_message(params, account=None, parse_mode=None):
     """
     Send a message (exteraGram-compatible). `params` is a dict; common keys:
       peer / dialog_id  : target dialog id (int, REQUIRED)
@@ -204,6 +301,7 @@ def send_message(params, account=None):
     """
     if not isinstance(params, dict):
         raise TypeError("send_message expects a dict of parameters")
+    params = _apply_parse_mode(dict(params), parse_mode)
 
     peer = None
     for key in ("peer", "dialog_id", "dialogId", "chat_id", "chatId", "user_id", "userId", "to"):
@@ -232,6 +330,23 @@ def send_message(params, account=None):
     return spm
 
 
+def edit_message(message_obj, text=None, file_path=None, parse_mode=None, with_spoiler=False, **kwargs):
+    """Edit a MessageObject's text/caption, or replace media with a local file."""
+    entities = kwargs.get("entities")
+    if text is not None and parse_mode:
+        parsed = parse_text(text, parse_mode, is_caption=False)
+        text = parsed.get("message", text)
+        entities = parsed.get("entities")
+    has_media_spoilers = kwargs.get("has_media_spoilers", kwargs.get("hasMediaSpoilers", with_spoiler))
+    PluginUtils.editMessage(
+        message_obj,
+        None if text is None else str(text),
+        entities,
+        None if file_path is None else str(file_path),
+        bool(has_media_spoilers),
+    )
+
+
 class RequestCallback(dynamic_proxy(RequestDelegate)):
     def __init__(self, fn=None):
         super().__init__()
@@ -248,6 +363,23 @@ class RequestCallback(dynamic_proxy(RequestDelegate)):
 
 
 _RequestDelegate = RequestCallback
+
+
+class NotificationCenterDelegate(dynamic_proxy(NotificationCenterDelegateInterface)):
+    def __init__(self, fn=None):
+        super().__init__()
+        self.fn = fn
+
+    def didReceivedNotification(self, id, account, *args):
+        if self.fn is None:
+            return
+        try:
+            self.fn(id, account, args)
+        except TypeError:
+            self.fn(id, account, *args)
+        except Exception as e:
+            from android_utils import log
+            log(e)
 
 
 def _coerce_request_callback(on_complete):

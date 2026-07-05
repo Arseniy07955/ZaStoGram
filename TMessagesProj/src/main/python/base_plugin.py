@@ -6,6 +6,68 @@ and a subclass of BasePlugin. The host instantiates it, injects a Java PluginCon
 ``self._context`` and drives its lifecycle.
 """
 
+import ast
+import json
+
+
+def _is_structured_setting(value):
+    return isinstance(value, (dict, list, tuple))
+
+
+def _clone_structured_default(value):
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except Exception:
+        try:
+            return value.copy()
+        except Exception:
+            return value
+
+
+def _java_map_to_dict(value):
+    try:
+        return {str(k): value.get(k) for k in value.keySet()}
+    except Exception:
+        return None
+
+
+def _java_list_to_list(value):
+    try:
+        return [value.get(i) for i in range(value.size())]
+    except Exception:
+        return None
+
+
+def _decode_structured_setting(value, default):
+    if isinstance(default, dict):
+        if isinstance(value, dict):
+            return value
+        java_map = _java_map_to_dict(value)
+        if java_map is not None:
+            return java_map
+    elif isinstance(default, (list, tuple)):
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        java_list = _java_list_to_list(value)
+        if java_list is not None:
+            return java_list
+
+    text = str(value or "").strip()
+    if not text:
+        return _clone_structured_default(default)
+    for load in (json.loads, ast.literal_eval):
+        try:
+            parsed = load(text)
+        except Exception:
+            continue
+        if isinstance(default, dict) and isinstance(parsed, dict):
+            return parsed
+        if isinstance(default, (list, tuple)) and isinstance(parsed, (list, tuple)):
+            return list(parsed)
+    return _clone_structured_default(default)
+
 
 class HookStrategy:
     """Return strategy for high-level request/response/update/message hooks."""
@@ -204,9 +266,12 @@ class BasePlugin:
     # ------------------------------------------------------------------ settings storage
 
     def get_setting(self, key, default=None):
-        value = self._context.getSetting(key, default)
+        structured = _is_structured_setting(default)
+        value = self._context.getSetting(key, None if structured else default)
         if value is None:
-            return default
+            return _clone_structured_default(default) if structured else default
+        if structured:
+            return _decode_structured_setting(value, default)
         # getSetting is declared to return Object, so Chaquopy hands back a Java-typed proxy
         # (e.g. java.lang.Boolean) that does NOT unbox via bool()/int(). Coerce to the native
         # Python type implied by `default`. NB: check bool before int — bool subclasses int.
@@ -225,6 +290,11 @@ class BasePlugin:
         return str(value)
 
     def set_setting(self, key, value, reload_settings=False):
+        if _is_structured_setting(value):
+            try:
+                value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                value = str(value)
         self._context.setSetting(key, value)
         if reload_settings:
             try:
