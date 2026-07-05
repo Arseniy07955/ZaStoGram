@@ -1,8 +1,8 @@
 {
-  "version_code": 6930,
+  "version_code": 694000,
   "version_name": "12.8.1 (v3.0)",
   "url": "https://s3.ru1.storage.beget.cloud/88918b3137bc-openhearted-zohra/myfork/dist-release/TelegaNEW-standalone-arm64-v8a.apk",
-  "changelog": "• Новая версия форка v3.0\n• Исправлена ошибка в системе обновлений\n• Обновлен список приоритетных прокси",
+  "changelog": "• Новая версия форка v3.0\n• тест улучшения подключений!",
   "proxies": [
     {
       "server": "nsk.cdn.catpaws.ru",
