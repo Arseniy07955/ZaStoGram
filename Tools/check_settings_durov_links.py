@@ -12,14 +12,14 @@ STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 
 
 EXPECTED_STRINGS = {
-    "DurovLalka": "Дуров лалка",
+    "DurovLalka": "TelegaNew info",
     "OurChannel": "Наш канал",
     "OurVpn": "Наш VPN",
 }
 
 EXPECTED_LINKS = {
-    24: ("OurChannel", "settings_channel", "https://t.me/bypassblock"),
-    25: ("OurVpn", "settings_privacy", "https://t.me/vpndiscordyooutube"),
+    24: ("OurChannel", "settings_channel", "https://t.me/senkapopkavpn"),
+    25: ("OurVpn", "settings_privacy", "https://t.me/SenkapopkaVpnBot"),
 }
 
 
